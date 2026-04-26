@@ -2043,7 +2043,12 @@ const apiViveres = {
     return data || [];
   },
   async crearPedido(pedido, items) {
-    const { data: nuevo, error } = await supabase.from("viveres_pedidos").insert([pedido]).select().single();
+    const payload = {
+      ...pedido,
+      fecha_pedido: pedido.fecha_pedido || null,
+      fecha_necesaria: pedido.fecha_necesaria || null,
+    };
+    const { data: nuevo, error } = await supabase.from("viveres_pedidos").insert([payload]).select().single();
     if (error) throw error;
     if (items?.length) {
       await supabase.from("viveres_pedido_items").insert(items.map(it => ({ ...it, pedido_id: nuevo.id })));
@@ -2122,6 +2127,9 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
     });
   }, []);
 
+  const [itemsManuales, setItemsManuales] = useState([]);
+  const blankManual = () => ({ id: `manual_${Date.now()}_${Math.random()}`, descripcion: "", categoria: "Almacén", temperatura: "Seco", unidad: "Unidad", stock_actual: 0, cantidad_pedida: 0, catalogo_id: null, volumen_peso: 1 });
+
   const setCab = (k, v) => setCabecera(c => ({ ...c, [k]: v }));
   const setItem = (id, k, v) => setItems(prev => prev.map(it => it.catalogo_id === id ? { ...it, [k]: parseFloat(v) || 0 } : it));
 
@@ -2170,8 +2178,11 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
   const categorias = [...new Set(catalogo.map(c => c.categoria))].sort();
   const temperaturas = [...new Set(catalogo.map(c => c.temperatura).filter(Boolean))];
 
-  // Items con cantidad pedida > 0
-  const itemsConPedido = items.filter(it => it.cantidad_pedida > 0);
+  // Items con cantidad pedida > 0 (catálogo + manuales)
+  const itemsConPedido = [
+    ...items.filter(it => it.cantidad_pedida > 0),
+    ...itemsManuales.filter(it => it.cantidad_pedida > 0 && it.descripcion.trim()),
+  ];
 
   const handleGuardar = async (status = "borrador") => {
     if (!cabecera.base_buque || !cabecera.solicitado_por) {
@@ -2180,7 +2191,10 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
     }
     setSaving(true);
     try {
-      const itemsAGuardar = items.filter(it => it.cantidad_pedida > 0 || it.stock_actual > 0);
+      const itemsAGuardar = [
+        ...items.filter(it => it.cantidad_pedida > 0 || it.stock_actual > 0),
+        ...itemsManuales.filter(it => it.descripcion.trim() && (it.cantidad_pedida > 0 || it.stock_actual > 0)),
+      ];
       const pedido = await apiViveres.crearPedido({ ...cabecera, status }, itemsAGuardar);
 
       // Si se envía, crear requisición automáticamente
@@ -2305,27 +2319,122 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
             </div>
           </div>
 
-          {/* Filtros */}
+          {/* Pestañas por categoría */}
+          <div style={{ display: "flex", gap: 0, borderBottom: "2px solid var(--border)", marginBottom: 14, overflowX: "auto" }}>
+            <div className={`tab ${filtroCateg === "" ? "active" : ""}`} onClick={() => setFiltroCateg("")} style={{ whiteSpace: "nowrap" }}>Todos</div>
+            {categorias.map(cat => {
+              const cantCat = items.filter(it => it.categoria === cat && it.cantidad_pedida > 0).length;
+              return (
+                <div key={cat} className={`tab ${filtroCateg === cat ? "active" : ""}`} onClick={() => setFiltroCateg(cat)} style={{ whiteSpace: "nowrap" }}>
+                  {cat}
+                  {cantCat > 0 && <span style={{ marginLeft: 6, background: "var(--accent2)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 8, fontFamily: "var(--mono)" }}>{cantCat}</span>}
+                </div>
+              );
+            })}
+            <div
+              className={`tab ${filtroCateg === "__manual__" ? "active" : ""}`}
+              onClick={() => setFiltroCateg("__manual__")}
+              style={{ whiteSpace: "nowrap", color: filtroCateg === "__manual__" ? "var(--purple)" : undefined, borderBottomColor: filtroCateg === "__manual__" ? "var(--purple)" : undefined }}
+            >
+              ✏️ Ingreso manual
+              {itemsManuales.filter(it => it.cantidad_pedida > 0 && it.descripcion.trim()).length > 0 && (
+                <span style={{ marginLeft: 6, background: "var(--purple)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 8, fontFamily: "var(--mono)" }}>
+                  {itemsManuales.filter(it => it.cantidad_pedida > 0 && it.descripcion.trim()).length}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Vista Ingreso Manual */}
+          {filtroCateg === "__manual__" ? (
+            <div>
+              <div className="info-box accent mb12" style={{ fontSize: 11 }}>
+                Agregá ítems que no están en el catálogo. Completá todos los campos y luego se incluirán en el pedido al enviar.
+              </div>
+              <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 80 }}>
+                <div className="table-wrap">
+                  <table className="tracker-table">
+                    <thead>
+                      <tr>
+                        <th>Temperatura</th>
+                        <th>Categoría</th>
+                        <th style={{ width: "30%" }}>Descripción</th>
+                        <th>Unidad</th>
+                        <th style={{ width: 100 }}>Stock actual</th>
+                        <th style={{ width: 120 }}>Cantidad pedida</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itemsManuales.map((it, i) => (
+                        <tr key={it.id}>
+                          <td>
+                            <select value={it.temperatura} onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], temperatura: e.target.value }; setItemsManuales(arr); }}
+                              style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--sans)", fontSize: 11, padding: "4px 8px", outline: "none" }}>
+                              <option>Seco</option><option>Refrigerado</option><option>Congelado</option>
+                            </select>
+                          </td>
+                          <td>
+                            <select value={it.categoria} onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], categoria: e.target.value }; setItemsManuales(arr); }}
+                              style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--sans)", fontSize: 11, padding: "4px 8px", outline: "none", minWidth: 100 }}>
+                              {categorias.map(c => <option key={c}>{c}</option>)}
+                              <option>Otro</option>
+                            </select>
+                          </td>
+                          <td>
+                            <input value={it.descripcion} onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], descripcion: e.target.value }; setItemsManuales(arr); }}
+                              placeholder="Descripción del ítem..."
+                              style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--sans)", fontSize: 12, padding: "4px 8px", outline: "none" }} />
+                          </td>
+                          <td>
+                            <input value={it.unidad} onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], unidad: e.target.value }; setItemsManuales(arr); }}
+                              placeholder="Uni, Kg..."
+                              style={{ width: 70, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none" }} />
+                          </td>
+                          <td>
+                            <input type="number" min={0} value={it.stock_actual || ""} placeholder="0"
+                              onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], stock_actual: parseFloat(e.target.value) || 0 }; setItemsManuales(arr); }}
+                              style={{ width: 80, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none", textAlign: "right" }} />
+                          </td>
+                          <td>
+                            <input type="number" min={0} value={it.cantidad_pedida || ""} placeholder="0"
+                              onChange={e => { const arr = [...itemsManuales]; arr[i] = { ...arr[i], cantidad_pedida: parseFloat(e.target.value) || 0 }; setItemsManuales(arr); }}
+                              style={{ width: 90, background: it.cantidad_pedida > 0 ? "#DCFCE7" : "var(--surface)", border: `1px solid ${it.cantidad_pedida > 0 ? "#86EFAC" : "var(--border)"}`, borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none", textAlign: "right", fontWeight: it.cantidad_pedida > 0 ? 700 : 400 }} />
+                          </td>
+                          <td>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setItemsManuales(itemsManuales.filter((_, j) => j !== i))}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                      {itemsManuales.length === 0 && (
+                        <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--muted2)", fontSize: 12 }}>Sin ítems manuales — usá el botón para agregar</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setItemsManuales([...itemsManuales, blankManual()])}>+ Agregar ítem manual</button>
+            </div>
+          ) : (
+          </div>
+
+          {/* Filtro búsqueda y temperatura */}
           <div className="filter-row" style={{ marginBottom: 12 }}>
             <input className="filter-input" placeholder="🔍 Buscar ítem..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={{ minWidth: 200 }} />
-            <select className="filter-select" value={filtroCateg} onChange={e => setFiltroCateg(e.target.value)}>
-              <option value="">Todas las categorías</option>
-              {categorias.map(c => <option key={c}>{c}</option>)}
-            </select>
             <select className="filter-select" value={filtroTemp} onChange={e => setFiltroTemp(e.target.value)}>
               <option value="">Todas las temperaturas</option>
               {temperaturas.map(t => <option key={t}>{t}</option>)}
             </select>
-            {(filtroCateg || filtroTemp || busqueda) && (
-              <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroCateg(""); setFiltroTemp(""); setBusqueda(""); }}>✕ Limpiar</button>
+            {(filtroTemp || busqueda) && (
+              <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroTemp(""); setBusqueda(""); }}>✕ Limpiar</button>
             )}
             <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
-              {itemsConPedido.length} ítems pedidos · {itemsFiltrados.length} visibles
+              {itemsFiltrados.length} ítems visibles
             </span>
           </div>
 
           {/* Tabla de ítems */}
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 80 }}>
             <div className="table-wrap">
               <table className="tracker-table">
                 <thead>
@@ -2377,14 +2486,39 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
               </table>
             </div>
           </div>
+          {/* cierre del else de ingreso manual */}
+          )}
 
-          {/* Footer */}
-          <div className="flex-gap mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-            <button className="btn btn-ghost" onClick={() => setStep(1)}>← Volver</button>
-            <button className="btn btn-ghost" onClick={() => handleGuardar("borrador")} disabled={saving}>Guardar borrador</button>
-            <button className="btn btn-primary" onClick={() => handleGuardar("enviado")} disabled={saving || itemsConPedido.length === 0}>
-              {saving ? "Enviando..." : `Enviar al comprador (${itemsConPedido.length} ítems)`}
-            </button>
+          {/* CARRITO FLOTANTE */}
+          <div style={{ position: "fixed", bottom: 0, left: 235, right: 0, background: "var(--tm-navy)", borderTop: "2px solid rgba(255,255,255,.15)", padding: "12px 28px", display: "flex", alignItems: "center", gap: 16, zIndex: 50, boxShadow: "0 -4px 16px rgba(33,51,99,.2)" }}>
+            <div style={{ flex: 1 }}>
+              {itemsConPedido.length === 0 ? (
+                <span style={{ fontSize: 12, color: "rgba(255,255,255,.5)" }}>Sin ítems seleccionados — completá cantidades pedidas</span>
+              ) : (
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  {/* Resumen por categoría */}
+                  {[...new Set(itemsConPedido.map(it => it.categoria))].map(cat => {
+                    const count = itemsConPedido.filter(it => it.categoria === cat).length;
+                    return (
+                      <div key={cat} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontSize: 10, color: "rgba(255,255,255,.5)" }}>{cat}</span>
+                        <span style={{ fontSize: 11, fontFamily: "var(--mono)", fontWeight: 700, color: "#fff", background: "rgba(255,255,255,.15)", borderRadius: 4, padding: "1px 6px" }}>{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "var(--mono)" }}>
+                {itemsConPedido.length} ítem{itemsConPedido.length !== 1 ? "s" : ""}
+              </div>
+              <button className="btn btn-ghost" onClick={() => setStep(1)} style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.2)" }}>← Volver</button>
+              <button className="btn" onClick={() => handleGuardar("borrador")} disabled={saving} style={{ background: "rgba(255,255,255,.15)", color: "#fff", borderColor: "rgba(255,255,255,.2)" }}>Guardar borrador</button>
+              <button className="btn btn-success" onClick={() => handleGuardar("enviado")} disabled={saving || itemsConPedido.length === 0}>
+                {saving ? "Enviando..." : `✓ Enviar al comprador`}
+              </button>
+            </div>
           </div>
         </div>
       )}
