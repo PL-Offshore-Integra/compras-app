@@ -33,7 +33,6 @@ const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
 const fmt = (n, cur = "ARS") =>
   n != null ? new Intl.NumberFormat("es-AR", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(n) : "—";
 const fmtDate = d => d ? new Date(d).toLocaleDateString("es-AR") : "—";
-const delay = ms => new Promise(r => setTimeout(r, ms));
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 const api = {
@@ -74,6 +73,7 @@ const api = {
     let q = supabase.from("tracker_lineas").select("*, requisiciones(nro_solicitud, titulo, empresa, base_buque, urgencia, solicitado_por)").order("created_at", { ascending: false });
     if (filtros.status) q = q.eq("status", filtros.status);
     if (filtros.statuses) q = q.in("status", filtros.statuses);
+    if (filtros.proveedor) q = q.eq("proveedor_elegido", filtros.proveedor);
     const { data, error } = await q;
     if (error) throw error;
     return data || [];
@@ -97,6 +97,11 @@ const api = {
     if (error) throw error;
     return data;
   },
+  async actualizarProveedor(id, cambios) {
+    const { data, error } = await supabase.from("proveedores").update(cambios).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
   nextOcNum() { return `OC-${String(Date.now()).slice(-4)}`; }
 };
 
@@ -105,15 +110,12 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  /* Terra Mare brand palette */
   --tm-navy:   #213363;
   --tm-blue:   #235C96;
   --tm-mid:    #6381A7;
   --tm-light:  #A5B5CC;
   --tm-white:  #FFFFFF;
   --tm-black:  #000000;
-
-  /* App semantic tokens */
   --bg:        #F0F4F8;
   --surface:   #FFFFFF;
   --surface2:  #F5F7FA;
@@ -137,7 +139,7 @@ const CSS = `
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100vh}
 .app{display:flex;min-height:100vh}
 
-/* SIDEBAR — Navy Terra Mare */
+/* SIDEBAR */
 .sidebar{width:235px;min-width:235px;background:var(--tm-navy);border-right:none;display:flex;flex-direction:column;box-shadow:2px 0 8px rgba(33,51,99,.15)}
 .sidebar-header{padding:0 0 0;border-bottom:1px solid rgba(255,255,255,.1)}
 .sidebar-logo-wrap{padding:20px 18px 16px;display:flex;align-items:center;gap:12px}
@@ -181,6 +183,19 @@ td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle
 tr:last-child td{border-bottom:none}
 tr.click:hover td{background:var(--surface3);cursor:pointer}
 
+/* TRACKER TABLE */
+.tracker-table{width:100%;border-collapse:collapse;font-size:12px}
+.tracker-table th{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2);position:sticky;top:0;z-index:2}
+.tracker-table th.sortable{cursor:pointer;user-select:none}
+.tracker-table th.sortable:hover{color:var(--tm-navy)}
+.tracker-table td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tracker-table tr:hover td{background:var(--surface3);cursor:pointer}
+.tracker-table tr:last-child td{border-bottom:none}
+.filter-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.filter-input{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-family:var(--sans);font-size:11px;padding:6px 10px;outline:none;transition:border-color .15s;min-width:130px}
+.filter-input:focus{border-color:var(--tm-blue)}
+.filter-select{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-family:var(--sans);font-size:11px;padding:6px 10px;outline:none;cursor:pointer;min-width:130px}
+
 /* BADGES */
 .badge{display:inline-flex;align-items:center;font-family:var(--mono);font-size:9px;font-weight:600;padding:3px 8px;border-radius:4px;white-space:nowrap;letter-spacing:.3px}
 .b-amber{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
@@ -200,6 +215,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .btn-danger{background:transparent;color:var(--danger);border-color:var(--danger)}.btn-danger:hover{background:#FEE2E2}
 .btn-ghost{background:transparent;color:var(--muted);border-color:var(--border)}.btn-ghost:hover{color:var(--text);border-color:var(--border2);background:var(--surface2)}
 .btn-warn{background:transparent;color:var(--warn);border-color:#FDE68A}.btn-warn:hover{background:#FEF3C7}
+.btn-cond{background:transparent;color:var(--purple);border-color:#DDD6FE}.btn-cond:hover{background:#EDE9FE}
 .btn-sm{padding:4px 10px;font-size:10px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 
@@ -249,22 +265,14 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tl-ev{font-size:13px;font-weight:600;color:var(--tm-navy)}.tl-meta{font-size:11px;color:var(--muted);margin-top:2px}
 
 /* INBOX */
-.inbox-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-.inbox-company{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--accent);letter-spacing:1px}
-.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
-.req-row:hover{border-color:var(--border2)}
-.req-row.unread{border-left:3px solid var(--accent)}
-.req-title{font-weight:500;font-size:13px;margin-bottom:4px}
-.req-meta{display:flex;gap:12px;font-size:11px;color:var(--muted);flex-wrap:wrap;align-items:center}
-
-/* TRACKER */
-.tracker-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:12px 16px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
-.tracker-row:hover{border-color:var(--border2)}
-.tracker-top{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
-.tracker-desc{font-weight:500;font-size:13px}
-.tracker-detail{font-size:11px;color:var(--muted);margin-top:4px}
-.detail-items{background:var(--surface2);border-radius:var(--r);padding:8px 10px;margin-top:8px;font-size:11px;color:var(--muted)}
-.detail-item-row{display:flex;gap:8px;padding:2px 0}
+.inbox-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--border)}
+.inbox-company{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tm-navy);letter-spacing:.5px}
+.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(33,51,99,.05)}
+.req-row:hover{border-color:var(--tm-blue);box-shadow:0 2px 8px rgba(35,92,150,.12)}
+.req-row.unread{border-left:4px solid var(--tm-blue)}
+.req-row.devuelto{border-left:4px solid var(--warn)}
+.req-title{font-weight:600;font-size:14px;margin-bottom:6px;color:var(--tm-navy)}
+.req-meta{display:flex;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap;align-items:center}
 
 /* NOTIF */
 .notif{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-left-width:3px;border-radius:var(--r2);padding:12px 16px;font-size:13px;animation:slideUp .2s;z-index:300;max-width:340px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(33,51,99,.15);color:var(--text)}
@@ -274,6 +282,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tag{display:inline-block;font-family:var(--mono);font-size:9px;padding:2px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-weight:500}
 .info-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;font-size:13px;color:var(--text)}
 .info-box.accent{border-left:3px solid var(--tm-blue)}
+.info-box.warn{border-left:3px solid var(--warn);background:#FFFBEB}
 .flex{display:flex}.flex-gap{display:flex;gap:8px;align-items:center}.flex-between{display:flex;justify-content:space-between;align-items:center}
 .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
 .mb8{margin-bottom:8px}.mb12{margin-bottom:12px}
@@ -287,24 +296,15 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tab{font-family:var(--sans);font-size:11px;font-weight:600;padding:9px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .12s;text-transform:uppercase;letter-spacing:.5px;margin-bottom:-2px}
 .tab.active{color:var(--tm-blue);border-bottom-color:var(--tm-blue)}
 .grupo-chip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;font-family:var(--mono);font-size:12px;font-weight:700;background:#DBEAFE;color:var(--tm-blue);border:1px solid #BFDBFE;flex-shrink:0}
-
-/* INBOX */
-.inbox-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--border)}
-.inbox-company{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tm-navy);letter-spacing:.5px}
-.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(33,51,99,.05)}
-.req-row:hover{border-color:var(--tm-blue);box-shadow:0 2px 8px rgba(35,92,150,.12)}
-.req-row.unread{border-left:4px solid var(--tm-blue)}
-.req-title{font-weight:600;font-size:14px;margin-bottom:6px;color:var(--tm-navy)}
-.req-meta{display:flex;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap;align-items:center}
-
-/* TRACKER */
-.tracker-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(33,51,99,.05)}
-.tracker-row:hover{border-color:var(--tm-blue);box-shadow:0 2px 8px rgba(35,92,150,.12)}
-.tracker-top{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
-.tracker-desc{font-weight:600;font-size:14px;color:var(--tm-navy)}
-.tracker-detail{font-size:12px;color:var(--muted);margin-top:4px}
 .detail-items{background:var(--surface2);border-radius:var(--r);padding:10px 12px;margin-top:10px;font-size:11px;color:var(--muted);border:1px solid var(--border)}
 .detail-item-row{display:flex;gap:8px;padding:2px 0}
+
+/* CRM proveedores */
+.prov-tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:16px}
+.prov-tab{font-family:var(--sans);font-size:11px;font-weight:600;padding:9px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px;text-transform:uppercase;letter-spacing:.5px;transition:all .12s}
+.prov-tab.active{color:var(--tm-blue);border-bottom-color:var(--tm-blue)}
+.historial-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:8px;font-size:12px}
+.historial-row:hover{border-color:var(--border2)}
 `;
 
 // ─── COMPONENTS ──────────────────────────────────────────────────────────────
@@ -350,11 +350,91 @@ function Timeline({ historial }) {
   })}</ul>;
 }
 
+// ─── MODAL: APROBAR CONDICIONAL (editar ítems antes de aprobar) ──────────────
+function AprobarCondicionalModal({ req, proveedores, onClose, onSave }) {
+  const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "", proyecto: "" });
+  const [items, setItems] = useState(
+    req.requisicion_items?.length ? req.requisicion_items.map(it => ({ ...it })) : [blank()]
+  );
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Actualizar ítems
+      await api.actualizarItems(req.id, items.filter(it => it.descripcion?.trim()).map(({ id: _id, requisicion_id: _rid, ...rest }) => rest));
+      // Aprobar con nota
+      const updated = await api.actualizarRequisicion(
+        req.id,
+        { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_revision: new Date().toISOString(), fecha_aprobacion: new Date().toISOString() },
+        `Aprobado con modificaciones${nota ? ` — ${nota}` : ""}`,
+        nota || null
+      );
+      // Fetch fresh para pasar al consolidar
+      const fresh = await api.getRequisicion(req.id);
+      onSave(fresh);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="mhdr">
+          <div>
+            <div className="mtitle">APROBAR CON MODIFICACIONES</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          <div className="info-box warn mb12" style={{ fontSize: 11 }}>
+            Podés editar la descripción, cantidad, unidad o proveedor sugerido de cada ítem antes de aprobar.
+            Los cambios quedan registrados en el historial.
+          </div>
+          <div className="table-wrap">
+            <table className="items-edit">
+              <thead><tr><th style={{ width: "35%" }}>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th><th></th></tr></thead>
+              <tbody>
+                {items.map((it, i) => <tr key={it.id || i}>
+                  <td><input value={it.descripcion || ""} onChange={e => setItem(i, "descripcion", e.target.value)} /></td>
+                  <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
+                  <td><input value={it.unidad || ""} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 55 }} /></td>
+                  <td>
+                    <select value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)}>
+                      <option value="">Sin sugerencia</option>
+                      {proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+          <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
+          <div className="mt12">
+            <FG label="Nota para el solicitante (opcional)">
+              <textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: Se ajustó la cantidad del ítem 1 según disponibilidad..." />
+            </FG>
+          </div>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "..." : "Aprobar con cambios → Tracker"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── MODAL: VER REQUISICIÓN (desde inbox) ────────────────────────────────────
 function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTracker, onRechazar }) {
   const [req, setReq] = useState(initialReq);
   const [tab, setTab] = useState("detalle");
   const [saving, setSaving] = useState(false);
+  const [showAprobarCond, setShowAprobarCond] = useState(false);
 
   const canAprobar = ["pendiente_revision", "en_revision"].includes(req.status);
   const canRechazar = ["pendiente_revision", "en_revision"].includes(req.status);
@@ -362,11 +442,28 @@ function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTrac
   const handleAprobar = async () => {
     setSaving(true);
     try {
-      const updated = await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_revision: new Date().toISOString(), fecha_aprobacion: new Date().toISOString() }, "Aprobado para cotizar");
+      const updated = await api.actualizarRequisicion(
+        req.id,
+        { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_revision: new Date().toISOString(), fecha_aprobacion: new Date().toISOString() },
+        "Aprobado para cotizar"
+      );
       onUpdate(updated);
       onMoverTracker(updated);
     } finally { setSaving(false); }
   };
+
+  if (showAprobarCond) {
+    return <AprobarCondicionalModal
+      req={req}
+      proveedores={proveedores}
+      onClose={() => setShowAprobarCond(false)}
+      onSave={(fresh) => {
+        setShowAprobarCond(false);
+        onUpdate(fresh);
+        onMoverTracker(fresh);
+      }}
+    />;
+  }
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -379,6 +476,7 @@ function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTrac
               <span className="tag">{req.empresa}</span>
               <span className="tag">{req.base_buque}</span>
               <span className="tag">{req.area}</span>
+              {req.veces_devuelto > 0 && <span className="badge b-orange">↩ Devuelta {req.veces_devuelto}x</span>}
             </div>
           </div>
           <button className="mclose" onClick={onClose}>✕</button>
@@ -395,6 +493,12 @@ function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTrac
               <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>PRESUPUESTO ESTIMADO</div><strong>{req.costo_estimado ? fmt(req.costo_estimado, req.moneda_estimada) : "No especificado"}</strong></div>
               <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>TIPO</div>{req.tipo_requisicion || "—"}</div>
             </div>
+            {req.veces_devuelto > 0 && req.motivo_rechazo_categoria && (
+              <div className="info-box warn mb12">
+                <strong>Devuelta anteriormente:</strong> {req.motivo_rechazo_categoria}
+                {req.motivo_rechazo_texto && <span> — {req.motivo_rechazo_texto}</span>}
+              </div>
+            )}
             {req.observaciones && <div className="info-box mb12">{req.observaciones}</div>}
             <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Ítems solicitados</div>
             <div className="table-wrap">
@@ -419,6 +523,7 @@ function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTrac
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
           {canRechazar && <button className="btn btn-danger" onClick={() => { onClose(); onRechazar(req); }} disabled={saving}>Rechazar</button>}
+          {canAprobar && <button className="btn btn-cond" onClick={() => setShowAprobarCond(true)} disabled={saving}>Aprobar condicional</button>}
           {canAprobar && <button className="btn btn-primary" onClick={handleAprobar} disabled={saving}>{saving ? "..." : "Aprobar → Tracker"}</button>}
         </div>
       </div>
@@ -464,7 +569,7 @@ function ConsolidarModal({ req, onClose, onSave }) {
         </div>
         <div className="mbody">
           <div className="info-box accent mb12" style={{ fontSize: 11 }}>
-            Asigná cada ítem a un grupo (A, B, C...). Ítems del mismo grupo se consolidan en una sola línea del Tracker. Ítems en grupos distintos generan líneas separadas.
+            Asigná cada ítem a un grupo (A, B, C...). Ítems del mismo grupo se consolidan en una sola línea del Tracker.
           </div>
           <table className="items-edit">
             <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo</th></tr></thead>
@@ -480,7 +585,6 @@ function ConsolidarModal({ req, onClose, onSave }) {
               </tr>)}
             </tbody>
           </table>
-
           {grupos.length > 0 && <div className="mt12">
             <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Preview de líneas en el Tracker</div>
             {grupos.map(g => {
@@ -502,49 +606,77 @@ function ConsolidarModal({ req, onClose, onSave }) {
 }
 
 // ─── MODAL: RECHAZAR ─────────────────────────────────────────────────────────
+// E2: status → "rechazado_devuelto" para que vuelva al inbox del solicitante,
+//     se registra veces_devuelto y motivo para métricas
 function RechazarModal({ req, onClose, onSave }) {
   const [categoria, setCategoria] = useState("");
   const [texto, setTexto] = useState("");
+  const [devolver, setDevolver] = useState(true); // true = vuelve al inbox, false = rechazado definitivo
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     if (!categoria) return alert("Seleccioná una categoría de rechazo");
     setSaving(true);
     try {
+      // Si devolver=true → vuelve al inbox como pendiente_revision con veces_devuelto++
+      // Si devolver=false → queda como rechazado definitivo en archivo
+      const nuevoStatus = devolver ? "pendiente_revision" : "rechazado";
+      const evento = devolver ? `Devuelta al solicitante — ${categoria}` : `Rechazado definitivamente — ${categoria}`;
       const updated = await api.actualizarRequisicion(req.id, {
-        status: "rechazado",
+        status: nuevoStatus,
         motivo_rechazo_categoria: categoria,
         motivo_rechazo_texto: texto,
         veces_devuelto: (req.veces_devuelto || 0) + 1,
-      }, `Rechazado — ${categoria}`, texto || null);
-      onSave(updated);
+      }, evento, texto || null);
+      onSave(updated, devolver);
     } finally { setSaving(false); }
   };
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 500 }}>
+      <div className="modal" style={{ maxWidth: 520 }}>
         <div className="mhdr">
-          <div className="mtitle">RECHAZAR REQUISICIÓN</div>
+          <div className="mtitle">RECHAZAR / DEVOLVER REQUISICIÓN</div>
           <button className="mclose" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
-          <div className="form-grid" style={{ marginBottom: 12 }}>
-            <FG label="Categoría *" full>
-              <select value={categoria} onChange={e => setCategoria(e.target.value)}>
-                <option value="">Seleccionar motivo...</option>
-                {CATEGORIAS_RECHAZO.map(c => <option key={c}>{c}</option>)}
-              </select>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+            REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}
+          </div>
+          <FG label="Categoría de rechazo *" full>
+            <select value={categoria} onChange={e => setCategoria(e.target.value)}>
+              <option value="">Seleccionar motivo...</option>
+              {CATEGORIAS_RECHAZO.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </FG>
+          <div className="mt12">
+            <FG label="Detalle adicional (opcional)">
+              <textarea value={texto} onChange={e => setTexto(e.target.value)} placeholder="Explicación adicional para el solicitante..." />
             </FG>
           </div>
-          <FG label="Detalle adicional (opcional)">
-            <textarea value={texto} onChange={e => setTexto(e.target.value)} placeholder="Explicación adicional para el solicitante..." />
-          </FG>
+          <div className="mt12" style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px" }}>
+            <div style={{ fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>¿Qué hacemos con esta requisición?</div>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 10 }}>
+              <input type="radio" name="devolver" checked={devolver} onChange={() => setDevolver(true)} style={{ marginTop: 2, accentColor: "var(--warn)" }} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--warn)" }}>↩ Devolver para corrección</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Vuelve al inbox del solicitante marcada como "devuelta". Queda registrado el rechazo para métricas.</div>
+              </div>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+              <input type="radio" name="devolver" checked={!devolver} onChange={() => setDevolver(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>✕ Rechazar definitivamente</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Pasa al Archivo / Rechazados. No vuelve al inbox.</div>
+              </div>
+            </label>
+          </div>
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-danger" onClick={handleSave} disabled={saving || !categoria}>{saving ? "..." : "Confirmar rechazo"}</button>
+          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>
+            {saving ? "..." : devolver ? "↩ Devolver al solicitante" : "✕ Rechazar definitivamente"}
+          </button>
         </div>
       </div>
     </div>
@@ -552,6 +684,7 @@ function RechazarModal({ req, onClose, onSave }) {
 }
 
 // ─── MODAL: EDITAR LÍNEA TRACKER ─────────────────────────────────────────────
+// E3 fix: handleSave ahora llama onSave con el objeto actualizado + notif funciona
 function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
   const [form, setForm] = useState({
     descripcion: linea.descripcion || "",
@@ -571,12 +704,42 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const handleSave = async () => {
+  // E3 FIX: handleSave espera la respuesta de la API y llama onSave con el objeto actualizado
+  const handleSave = async (extraCambios = {}) => {
     setSaving(true);
     try {
-      const updated = await api.actualizarTrackerLinea(linea.id, { ...form, costo_real: form.costo_real ? parseFloat(form.costo_real) : null });
+      const payload = {
+        ...form,
+        ...extraCambios,
+        costo_real: form.costo_real ? parseFloat(form.costo_real) : null,
+      };
+      const updated = await api.actualizarTrackerLinea(linea.id, payload);
+      onSave(updated); // siempre pasa el objeto actualizado
+    } catch (e) {
+      console.error("Error guardando línea tracker:", e);
+      alert("Error al guardar. Revisá la consola.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmarEntrega = async () => {
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        status: "entregado",
+        fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0],
+        costo_real: form.costo_real ? parseFloat(form.costo_real) : null,
+      };
+      const updated = await api.actualizarTrackerLinea(linea.id, payload);
       onSave(updated);
-    } finally { setSaving(false); }
+    } catch (e) {
+      console.error("Error confirmando entrega:", e);
+      alert("Error al confirmar entrega.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const req = linea.requisiciones;
@@ -625,9 +788,10 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
 
           <div className="form-section">Proveedor y OC</div>
           <div className="form-grid">
+            {/* E5 FIX: proveedor_elegido lee de la tabla proveedores */}
             <FG label="Proveedor elegido">
               <select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}>
-                <option value="">Seleccionar...</option>
+                <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
               </select>
             </FG>
@@ -656,10 +820,8 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          {form.status !== "archivado" && form.fecha_entrega_real && (
-            <button className="btn btn-success btn-sm" onClick={() => { set("status", "entregado"); setTimeout(handleSave, 100); }} disabled={saving}>Confirmar entrega</button>
-          )}
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "..." : "Guardar"}</button>
+          <button className="btn btn-success btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
+          <button className="btn btn-primary" onClick={() => handleSave()} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</button>
         </div>
       </div>
     </div>
@@ -689,11 +851,15 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleUpdate = (updated) => setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r).filter(r => ["pendiente_revision", "en_revision"].includes(r.status)));
+  const handleUpdate = (updated) => {
+    setReqs(prev =>
+      prev.map(r => r.id === updated.id ? { ...r, ...updated } : r)
+        .filter(r => ["pendiente_revision", "en_revision"].includes(r.status))
+    );
+  };
 
   const handleMoverTracker = async (req) => {
     setSelected(null);
-    // Fetch fresh req with items to ensure requisicion_items is loaded
     try {
       const fresh = await api.getRequisicion(req.id);
       setConsolidando(fresh);
@@ -709,10 +875,17 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
     onNeedRefresh();
   };
 
-  const handleRechazado = (updated) => {
+  // E2 FIX: si devolver=true la req vuelve al inbox (re-aparece), si devolver=false sale
+  const handleRechazado = (updated, devolver) => {
     setRechazando(null);
-    setReqs(prev => prev.filter(r => r.id !== updated.id));
-    notify("Requisición rechazada", "warn");
+    if (devolver) {
+      // Vuelve al inbox con badge naranja
+      setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r));
+      notify("Requisición devuelta al solicitante para corrección", "warn");
+    } else {
+      setReqs(prev => prev.filter(r => r.id !== updated.id));
+      notify("Requisición rechazada definitivamente", "warn");
+    }
     onNeedRefresh();
   };
 
@@ -726,12 +899,12 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
       {loading ? <div className="loading"><span className="spin">◌</span> Cargando...</div> :
         reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin requisiciones pendientes</div> :
         reqs.map(r => (
-          <div key={r.id} className="req-row unread" onClick={() => setSelected(r)}>
+          <div key={r.id} className={`req-row ${r.veces_devuelto > 0 ? "devuelto" : "unread"}`} onClick={() => setSelected(r)}>
             <div className="flex-between mb8">
               <div className="flex-gap">
                 <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
                 <UrgBadge urgencia={r.urgencia} />
-                {r.veces_devuelto > 0 && <span className="badge b-orange">↩ {r.veces_devuelto}x</span>}
+                {r.veces_devuelto > 0 && <span className="badge b-orange">↩ Devuelta {r.veces_devuelto}x</span>}
               </div>
               <span style={{ fontSize: 10, color: "var(--muted)" }}>{fmtDate(r.created_at)}</span>
             </div>
@@ -744,6 +917,7 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
               <span>{r.solicitado_por}</span>
               {r.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Necesario: {fmtDate(r.fecha_necesaria)}</span></>}
               {r.costo_estimado && <><span>·</span><span>{fmt(r.costo_estimado, r.moneda_estimada)}</span></>}
+              {r.veces_devuelto > 0 && r.motivo_rechazo_categoria && <><span>·</span><span style={{ color: "var(--warn)", fontSize: 10 }}>Motivo anterior: {r.motivo_rechazo_categoria}</span></>}
             </div>
           </div>
         ))
@@ -756,12 +930,17 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
   );
 }
 
-// ─── PAGE: TRACKER ────────────────────────────────────────────────────────────
+// ─── PAGE: TRACKER — E4: vista tabla con filtros ──────────────────────────────
 function PageTracker({ statusFilter, notify }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [proveedores, setProveedores] = useState([]);
+
+  // Filtros
+  const [filtros, setFiltros] = useState({ empresa: "", proveedor: "", busqueda: "" });
+  const [sortCol, setSortCol] = useState("created_at");
+  const [sortDir, setSortDir] = useState("desc");
 
   const statusMap = {
     cotizacion: ["en_cotizacion"],
@@ -790,35 +969,143 @@ function PageTracker({ statusFilter, notify }) {
     load();
   };
 
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  // Filtrado y ordenamiento
+  const lineasFiltradas = lineas
+    .filter(l => {
+      const req = l.requisiciones;
+      if (filtros.empresa && req?.empresa !== filtros.empresa) return false;
+      if (filtros.proveedor && l.proveedor_elegido !== filtros.proveedor) return false;
+      if (filtros.busqueda) {
+        const q = filtros.busqueda.toLowerCase();
+        const match = (
+          l.descripcion?.toLowerCase().includes(q) ||
+          req?.nro_solicitud?.toString().includes(q) ||
+          req?.base_buque?.toLowerCase().includes(q) ||
+          l.proveedor_elegido?.toLowerCase().includes(q) ||
+          l.nro_oc?.toLowerCase().includes(q)
+        );
+        if (!match) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      let va, vb;
+      const ra = a.requisiciones, rb = b.requisiciones;
+      switch (sortCol) {
+        case "nro": va = ra?.nro_solicitud || 0; vb = rb?.nro_solicitud || 0; break;
+        case "descripcion": va = a.descripcion || ""; vb = b.descripcion || ""; break;
+        case "empresa": va = ra?.empresa || ""; vb = rb?.empresa || ""; break;
+        case "buque": va = ra?.base_buque || ""; vb = rb?.base_buque || ""; break;
+        case "proveedor": va = a.proveedor_elegido || ""; vb = b.proveedor_elegido || ""; break;
+        case "costo": va = a.costo_real || 0; vb = b.costo_real || 0; break;
+        case "entrega": va = a.fecha_entrega_prom || ""; vb = b.fecha_entrega_prom || ""; break;
+        default: va = a.created_at || ""; vb = b.created_at || "";
+      }
+      const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+  const SortIcon = ({ col }) => sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : " ·";
+
+  const empresasDisponibles = [...new Set(lineas.map(l => l.requisiciones?.empresa).filter(Boolean))];
+  const proveedoresDisponibles = [...new Set(lineas.map(l => l.proveedor_elegido).filter(Boolean))];
+
   return (
     <div>
+      {/* Fila de filtros */}
+      <div className="filter-row">
+        <input
+          className="filter-input"
+          placeholder="🔍  Buscar..."
+          value={filtros.busqueda}
+          onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))}
+        />
+        <select className="filter-select" value={filtros.empresa} onChange={e => setFiltros(f => ({ ...f, empresa: e.target.value }))}>
+          <option value="">Todas las empresas</option>
+          {empresasDisponibles.map(e => <option key={e}>{e}</option>)}
+        </select>
+        <select className="filter-select" value={filtros.proveedor} onChange={e => setFiltros(f => ({ ...f, proveedor: e.target.value }))}>
+          <option value="">Todos los proveedores</option>
+          {proveedoresDisponibles.map(p => <option key={p}>{p}</option>)}
+        </select>
+        {(filtros.empresa || filtros.proveedor || filtros.busqueda) && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setFiltros({ empresa: "", proveedor: "", busqueda: "" })}>✕ Limpiar</button>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>
+          {lineasFiltradas.length} de {lineas.length}
+        </span>
+      </div>
+
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
         lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>Sin líneas en este estado</div> :
-        lineas.map(l => {
-          const req = l.requisiciones;
-          const items = l.items_detalle || [];
-          return (
-            <div key={l.id} className="tracker-row" onClick={() => setSelected(l)}>
-              <div className="tracker-top">
-                <div className="grupo-chip">{l.grupo}</div>
-                <div className="tracker-desc">{l.descripcion}</div>
-                <TrackerBadge status={l.status} />
-                {req && <UrgBadge urgencia={req.urgencia} />}
-              </div>
-              <div className="tracker-detail">
-                {req && <span className="text-mono" style={{ color: "var(--accent)", marginRight: 10 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
-                {req && <span className="text-muted">{req.empresa} · {req.base_buque}</span>}
-                {l.proveedor_elegido && <><span className="text-muted"> · </span><span>{l.proveedor_elegido}</span></>}
-                {l.nro_oc && <><span className="text-muted"> · </span><span className="text-mono" style={{ color: "var(--accent2)" }}>{l.nro_oc}</span></>}
-                {l.costo_real && <><span className="text-muted"> · </span><span className="text-mono">{fmt(l.costo_real, l.moneda_real)}</span></>}
-                {l.fecha_entrega_prom && <><span className="text-muted"> · </span><span style={{ color: "var(--warn)" }}>Entrega: {fmtDate(l.fecha_entrega_prom)}</span></>}
-              </div>
-              {items.length > 0 && <div className="detail-items mt8">
-                {items.map((it, i) => <span key={i} className="tag" style={{ marginRight: 4, marginBottom: 4 }}>{it.descripcion} ×{it.cantidad}</span>)}
-              </div>}
-            </div>
-          );
-        })
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="tracker-table">
+              <thead>
+                <tr>
+                  <th className="sortable" onClick={() => handleSort("nro")}>REQ<SortIcon col="nro" /></th>
+                  <th className="sortable" onClick={() => handleSort("descripcion")}>Descripción<SortIcon col="descripcion" /></th>
+                  <th className="sortable" onClick={() => handleSort("empresa")}>Empresa<SortIcon col="empresa" /></th>
+                  <th className="sortable" onClick={() => handleSort("buque")}>Base/Buque<SortIcon col="buque" /></th>
+                  <th>Urgencia</th>
+                  <th className="sortable" onClick={() => handleSort("proveedor")}>Proveedor<SortIcon col="proveedor" /></th>
+                  <th>OC</th>
+                  <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th className="sortable" onClick={() => handleSort("entrega")}>Entrega prom.<SortIcon col="entrega" /></th>
+                  <th>Ítems</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineasFiltradas.length === 0 ? (
+                  <tr><td colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados para los filtros aplicados</td></tr>
+                ) : lineasFiltradas.map(l => {
+                  const req = l.requisiciones;
+                  const items = l.items_detalle || [];
+                  return (
+                    <tr key={l.id} onClick={() => setSelected(l)}>
+                      <td>
+                        <div className="flex-gap">
+                          <div className="grupo-chip">{l.grupo}</div>
+                          {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>
+                            REQ-{String(req.nro_solicitud).padStart(4, "0")}
+                          </span>}
+                        </div>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--tm-navy)", maxWidth: 220 }}>{l.descripcion}</div>
+                      </td>
+                      <td><span className="tag">{req?.empresa || "—"}</span></td>
+                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{req?.base_buque || "—"}</td>
+                      <td>{req ? <UrgBadge urgencia={req.urgencia} /> : "—"}</td>
+                      <td style={{ fontSize: 12 }}>{l.proveedor_elegido || <span style={{ color: "var(--muted2)" }}>Sin asignar</span>}</td>
+                      <td>
+                        {l.nro_oc
+                          ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span>
+                          : <span style={{ color: "var(--muted2)", fontSize: 11 }}>—</span>}
+                      </td>
+                      <td className="text-mono" style={{ fontSize: 12 }}>
+                        {l.costo_real ? fmt(l.costo_real, l.moneda_real) : <span style={{ color: "var(--muted2)" }}>—</span>}
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {l.fecha_entrega_prom
+                          ? <span style={{ color: "var(--warn)" }}>{fmtDate(l.fecha_entrega_prom)}</span>
+                          : <span style={{ color: "var(--muted2)" }}>—</span>}
+                      </td>
+                      <td>
+                        <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{items.length} ítem{items.length !== 1 ? "s" : ""}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       }
 
       {selected && <TrackerLineaModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} />}
@@ -852,7 +1139,7 @@ function PageArchivo({ tipo }) {
   if (tipo === "rechazados") return (
     <div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        data.length === 0 ? <div className="empty-state">Sin requisiciones rechazadas</div> :
+        data.length === 0 ? <div className="empty-state">Sin requisiciones rechazadas definitivamente</div> :
         data.map(r => <div key={r.id} className="req-row">
           <div className="flex-between mb8">
             <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
@@ -863,6 +1150,7 @@ function PageArchivo({ tipo }) {
             <span>{r.empresa} · {r.base_buque}</span>
             {r.motivo_rechazo_categoria && <><span>·</span><span style={{ color: "var(--danger)" }}>{r.motivo_rechazo_categoria}</span></>}
             {r.motivo_rechazo_texto && <><span>·</span><span>{r.motivo_rechazo_texto}</span></>}
+            {r.veces_devuelto > 0 && <><span>·</span><span className="badge b-orange">↩ {r.veces_devuelto}x devuelta antes</span></>}
           </div>
         </div>)
       }
@@ -875,17 +1163,18 @@ function PageArchivo({ tipo }) {
         data.length === 0 ? <div className="empty-state">Sin entregas registradas</div> :
         data.map(l => {
           const req = l.requisiciones;
-          return <div key={l.id} className="tracker-row" onClick={() => setSelected(l)}>
-            <div className="tracker-top">
+          return <div key={l.id} className="tracker-row" style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r2)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "all .15s" }} onClick={() => setSelected(l)}>
+            <div className="flex-gap" style={{ marginBottom: 6 }}>
               <div className="grupo-chip">{l.grupo}</div>
-              <div className="tracker-desc">{l.descripcion}</div>
+              <span style={{ fontWeight: 600, fontSize: 14, color: "var(--tm-navy)" }}>{l.descripcion}</span>
               <TrackerBadge status="entregado" />
             </div>
-            <div className="tracker-detail">
-              {req && <span className="text-muted">{req.empresa} · {req.base_buque}</span>}
-              {l.proveedor_elegido && <><span className="text-muted"> · </span><span>{l.proveedor_elegido}</span></>}
-              {l.nro_oc && <><span className="text-muted"> · </span><span className="text-mono" style={{ color: "var(--accent2)" }}>{l.nro_oc}</span></>}
-              {l.fecha_entrega_real && <><span className="text-muted"> · Entregado: </span><span>{fmtDate(l.fecha_entrega_real)}</span></>}
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              {req && <span>{req.empresa} · {req.base_buque}</span>}
+              {l.proveedor_elegido && <span> · {l.proveedor_elegido}</span>}
+              {l.nro_oc && <span className="text-mono" style={{ color: "var(--accent2)" }}> · {l.nro_oc}</span>}
+              {l.fecha_entrega_real && <span> · Entregado: {fmtDate(l.fecha_entrega_real)}</span>}
+              {l.costo_real && <span className="text-mono"> · {fmt(l.costo_real, l.moneda_real)}</span>}
             </div>
           </div>;
         })
@@ -900,6 +1189,9 @@ function PageNueva({ onSaved, onCancel, notify }) {
   const fileRef = useRef();
   const [excelItems, setExcelItems] = useState(null);
   const [drag, setDrag] = useState(false);
+  const [proveedores, setProveedores] = useState([]);
+
+  useEffect(() => { api.getProveedores().then(setProveedores); }, []);
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -931,7 +1223,7 @@ function PageNueva({ onSaved, onCancel, notify }) {
     <div>
       {!excelItems && <div className="card mb12">
         <div className="card-title">Importar desde Excel</div>
-        <div className={`${drag ? "drag" : ""}`} style={{ border: "2px dashed var(--border)", borderRadius: "var(--r2)", padding: 32, textAlign: "center", cursor: "pointer", transition: "all .2s" }}
+        <div style={{ border: "2px dashed var(--border)", borderRadius: "var(--r2)", padding: 32, textAlign: "center", cursor: "pointer", transition: "all .2s" }}
           onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
           onDrop={e => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
           onClick={() => fileRef.current.click()}>
@@ -944,14 +1236,15 @@ function PageNueva({ onSaved, onCancel, notify }) {
 
       <div className="card">
         <div className="card-title">{excelItems ? `${excelItems.length} ítems desde Excel — completar datos` : "Cargar manualmente"}</div>
-        <ReqForm initial={excelItems ? { requisicion_items: excelItems } : null} onSave={handleSave} onCancel={onCancel} />
+        <ReqForm initial={excelItems ? { requisicion_items: excelItems } : null} proveedores={proveedores} onSave={handleSave} onCancel={onCancel} />
       </div>
     </div>
   );
 }
 
 // ─── FORM: REQUISICIÓN ───────────────────────────────────────────────────────
-function ReqForm({ initial, onSave, onCancel }) {
+// E5: proveedor_sugerido ahora es <select> con los proveedores de la BD
+function ReqForm({ initial, proveedores = [], onSave, onCancel }) {
   const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "", proyecto: "" });
   const [form, setForm] = useState({ titulo: "", empresa: "Parana Logistica", base_buque: "", area: "", subarea: "", detalle_tecnico: "", tipo_requisicion: "", urgencia: "Normal", solicitado_por: "", fecha_necesaria: "", costo_estimado: "", moneda_estimada: "ARS", busco_alternativas: false, observaciones: "", ...(initial || {}) });
   const [items, setItems] = useState(initial?.requisicion_items?.length ? initial.requisicion_items : [blank()]);
@@ -1011,7 +1304,13 @@ function ReqForm({ initial, onSave, onCancel }) {
               <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
               <td><input value={it.unidad} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 50 }} /></td>
               <td><input type="number" value={it.stock_disponible} onChange={e => setItem(i, "stock_disponible", e.target.value)} style={{ width: 55 }} /></td>
-              <td><input value={it.proveedor_sugerido} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)} /></td>
+              <td>
+                {/* E5 FIX: select en lugar de input libre */}
+                <select value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)}>
+                  <option value="">Sin sugerencia</option>
+                  {proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+                </select>
+              </td>
               <td><input value={it.proyecto || ""} onChange={e => setItem(i, "proyecto", e.target.value)} /></td>
               <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
             </tr>)}
@@ -1049,7 +1348,7 @@ function PageKPIs() {
       <div className="stats">
         <div className="stat"><div className="stat-label">Total</div><div className="stat-value va">{total}</div></div>
         <div className="stat"><div className="stat-label">% Críticas</div><div className="stat-value vr">{total ? Math.round(urgentes / total * 100) : 0}%</div></div>
-        <div className="stat"><div className="stat-label">Ida y vuelta</div><div className="stat-value vm">{conIV}</div></div>
+        <div className="stat"><div className="stat-label">Devueltas</div><div className="stat-value vm">{conIV}</div></div>
         <div className="stat"><div className="stat-label">Rechazadas</div><div className="stat-value vgr">{rechazadas}</div></div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -1060,7 +1359,7 @@ function PageKPIs() {
           </table>
         </div>
         <div className="card">
-          <div className="card-title">Motivos de rechazo</div>
+          <div className="card-title">Motivos de rechazo / devolución</div>
           {Object.keys(byRechazo).length === 0 ? <div className="text-muted" style={{ fontSize: 12 }}>Sin rechazos registrados</div> :
             Object.entries(byRechazo).sort((a, b) => b[1] - a[1]).map(([cat, n]) => <div key={cat} className="kbar">
               <div className="kbar-lbl"><span style={{ color: "var(--muted)" }}>{cat}</span><span className="text-mono">{n}</span></div>
@@ -1087,32 +1386,187 @@ function PageKPIs() {
   );
 }
 
-// ─── PAGE: PROVEEDORES ───────────────────────────────────────────────────────
+// ─── PAGE: PROVEEDORES — E6: CRM con historial de compras ────────────────────
 function PageProveedores({ notify }) {
   const [provs, setProvs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
+  const [selected, setSelected] = useState(null); // proveedor seleccionado para ver detalle CRM
+  const [historial, setHistorial] = useState([]);
+  const [histLoading, setHistLoading] = useState(false);
   const [form, setForm] = useState({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "" });
+
   useEffect(() => { api.getProveedores().then(d => { setProvs(d); setLoading(false); }); }, []);
+
   const handleSave = async () => {
     if (!form.nombre) return;
-    const nuevo = await api.crearProveedor(form);
+    const nuevo = await api.crearProveedor({ ...form, activo: true });
     setProvs(p => [...p, nuevo]);
     setModal(false);
     setForm({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "" });
     notify("Proveedor agregado", "success");
   };
+
+  // E6: al seleccionar proveedor, traer historial de compras desde tracker_lineas
+  const handleSelectProveedor = async (prov) => {
+    setSelected(prov);
+    setHistLoading(true);
+    try {
+      const lineas = await api.getTrackerLineas({ proveedor: prov.nombre });
+      // Solo las que tienen precio (entregadas o con OC)
+      setHistorial(lineas.filter(l => l.costo_real || l.nro_oc));
+    } finally {
+      setHistLoading(false);
+    }
+  };
+
+  // Stats del proveedor seleccionado
+  const totalCompras = historial.reduce((acc, l) => acc + (l.costo_real || 0), 0);
+  const comprasARS = historial.filter(l => l.moneda_real === "ARS" || !l.moneda_real);
+  const comprasUSD = historial.filter(l => l.moneda_real === "USD");
+  const totalARS = comprasARS.reduce((acc, l) => acc + (l.costo_real || 0), 0);
+  const totalUSD = comprasUSD.reduce((acc, l) => acc + (l.costo_real || 0), 0);
+
   return (
     <div>
-      <div className="card">
-        <div className="card-title">Maestro de proveedores <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar</button></div>
-        {loading ? <div className="loading"><span className="spin">◌</span></div> :
-          <table><thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Tel.</th></tr></thead>
-            <tbody>{provs.map(p => <tr key={p.id}><td style={{ fontWeight: 500 }}>{p.nombre}</td><td className="text-muted">{p.rubro || "—"}</td><td>{p.contacto || "—"}</td><td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td><td className="text-mono" style={{ fontSize: 11 }}>{p.telefono || "—"}</td></tr>)}
-              {!provs.length && <tr><td colSpan={5}><div className="empty-state">Sin proveedores</div></td></tr>}
-            </tbody>
-          </table>}
-      </div>
+      {/* Vista detalle CRM de un proveedor */}
+      {selected ? (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>← Volver</button>
+            <div style={{ fontFamily: "var(--sans)", fontSize: 16, fontWeight: 700, color: "var(--tm-navy)" }}>{selected.nombre}</div>
+            {selected.rubro && <span className="tag">{selected.rubro}</span>}
+          </div>
+
+          {/* Info del proveedor */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+            <div className="card" style={{ margin: 0 }}>
+              <div className="card-title">Datos de contacto</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {selected.contacto && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>CONTACTO</span>{selected.contacto}</div>}
+                {selected.email && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>EMAIL</span><span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{selected.email}</span></div>}
+                {selected.telefono && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>TELÉFONO</span><span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{selected.telefono}</span></div>}
+                {selected.notas && <div className="info-box" style={{ fontSize: 12 }}>{selected.notas}</div>}
+              </div>
+            </div>
+            <div className="card" style={{ margin: 0 }}>
+              <div className="card-title">Resumen de compras</div>
+              {histLoading ? <div className="loading" style={{ padding: 20 }}><span className="spin">◌</span></div> : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="flex-between">
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>Órdenes registradas</span>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: "var(--tm-blue)" }}>{historial.length}</span>
+                  </div>
+                  {totalARS > 0 && <div className="flex-between">
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>Total ARS</span>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 14, fontWeight: 600, color: "var(--accent2)" }}>{fmt(totalARS, "ARS")}</span>
+                  </div>}
+                  {totalUSD > 0 && <div className="flex-between">
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>Total USD</span>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 14, fontWeight: 600, color: "var(--accent2)" }}>{fmt(totalUSD, "USD")}</span>
+                  </div>}
+                  {historial.length === 0 && <div style={{ fontSize: 12, color: "var(--muted2)" }}>Sin compras registradas aún</div>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Historial de compras */}
+          <div className="card">
+            <div className="card-title">Historial de compras</div>
+            {histLoading ? <div className="loading"><span className="spin">◌</span></div> :
+              historial.length === 0 ? <div className="empty-state" style={{ padding: 24 }}>Sin compras registradas para este proveedor</div> :
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>REQ</th>
+                      <th>Artículo / Descripción</th>
+                      <th>Ítems</th>
+                      <th>OC</th>
+                      <th>Precio</th>
+                      <th>Entrega prometida</th>
+                      <th>Entrega real</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historial.map(l => {
+                      const req = l.requisiciones;
+                      const items = l.items_detalle || [];
+                      return (
+                        <tr key={l.id}>
+                          <td>
+                            {req && <div>
+                              <div className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</div>
+                              <div style={{ fontSize: 10, color: "var(--muted)" }}>{req.empresa}</div>
+                            </div>}
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: 600, fontSize: 12, color: "var(--tm-navy)" }}>{l.descripcion}</div>
+                            {req?.base_buque && <div style={{ fontSize: 10, color: "var(--muted)" }}>{req.base_buque}</div>}
+                          </td>
+                          <td>
+                            {items.length > 0 ? (
+                              <div style={{ fontSize: 10, color: "var(--muted)", maxWidth: 180 }}>
+                                {items.slice(0, 2).map((it, i) => <div key={i}>· {it.descripcion} ×{it.cantidad}</div>)}
+                                {items.length > 2 && <div style={{ color: "var(--muted2)" }}>+{items.length - 2} más</div>}
+                              </div>
+                            ) : <span style={{ color: "var(--muted2)", fontSize: 11 }}>—</span>}
+                          </td>
+                          <td>
+                            {l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}
+                          </td>
+                          <td>
+                            {l.costo_real ? (
+                              <span className="text-mono" style={{ fontSize: 12, fontWeight: 600 }}>{fmt(l.costo_real, l.moneda_real || "ARS")}</span>
+                            ) : <span style={{ color: "var(--muted2)" }}>—</span>}
+                          </td>
+                          <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(l.fecha_entrega_prom)}</td>
+                          <td style={{ fontSize: 12, color: l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>
+                            {l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "Pendiente"}
+                          </td>
+                          <td><TrackerBadge status={l.status} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+          </div>
+        </div>
+      ) : (
+        /* Lista de proveedores */
+        <div className="card">
+          <div className="card-title">
+            Maestro de proveedores
+            <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar</button>
+          </div>
+          {loading ? <div className="loading"><span className="spin">◌</span></div> :
+            <table>
+              <thead>
+                <tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Tel.</th><th></th></tr>
+              </thead>
+              <tbody>
+                {provs.map(p => (
+                  <tr key={p.id} className="click" onClick={() => handleSelectProveedor(p)}>
+                    <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td className="text-muted">{p.rubro || "—"}</td>
+                    <td>{p.contacto || "—"}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.telefono || "—"}</td>
+                    <td><span style={{ fontSize: 11, color: "var(--tm-blue)" }}>Ver historial →</span></td>
+                  </tr>
+                ))}
+                {!provs.length && <tr><td colSpan={6}><div className="empty-state">Sin proveedores</div></td></tr>}
+              </tbody>
+            </table>
+          }
+        </div>
+      )}
+
+      {/* Modal nuevo proveedor */}
       {modal && <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
         <div className="modal" style={{ maxWidth: 500 }}>
           <div className="mhdr"><div className="mtitle">Nuevo Proveedor</div><button className="mclose" onClick={() => setModal(false)}>✕</button></div>
@@ -1126,7 +1580,10 @@ function PageProveedores({ notify }) {
             </div>
             <FG label="Notas"><textarea value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} /></FG>
           </div>
-          <div className="mftr"><button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button><button className="btn btn-primary" onClick={handleSave}>Guardar</button></div>
+          <div className="mftr">
+            <button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSave}>Guardar</button>
+          </div>
         </div>
       </div>}
     </div>
@@ -1225,7 +1682,7 @@ export default function App() {
           <div style={{ flex: 1 }} />
           <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,.1)" }}>
             <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", fontFamily: "var(--mono)", letterSpacing: 1 }}>
-              SISTEMA DE COMPRAS v2.0
+              SISTEMA DE COMPRAS v2.1
             </div>
           </div>
         </nav>
