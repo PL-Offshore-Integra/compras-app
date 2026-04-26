@@ -704,17 +704,30 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  // E3 FIX: handleSave espera la respuesta de la API y llama onSave con el objeto actualizado
+  // Limpia strings vacíos en campos opcionales para que Supabase reciba null
+  const buildPayload = (overrides = {}) => {
+    const f = { ...form, ...overrides };
+    return {
+      descripcion:          f.descripcion || null,
+      proveedor_elegido:    f.proveedor_elegido || null,
+      motivo_proveedor:     f.motivo_proveedor || null,
+      nro_oc:               f.nro_oc || null,
+      costo_real:           f.costo_real !== "" && f.costo_real != null ? parseFloat(f.costo_real) : null,
+      moneda_real:          f.moneda_real || "ARS",
+      plazo_pago:           f.plazo_pago || null,
+      fecha_entrega_prom:   f.fecha_entrega_prom || null,
+      fecha_entrega_real:   f.fecha_entrega_real || null,
+      status:               f.status || "en_cotizacion",
+      notas:                f.notas || null,
+    };
+  };
+
   const handleSave = async (extraCambios = {}) => {
     setSaving(true);
     try {
-      const payload = {
-        ...form,
-        ...extraCambios,
-        costo_real: form.costo_real ? parseFloat(form.costo_real) : null,
-      };
+      const payload = buildPayload(extraCambios);
       const updated = await api.actualizarTrackerLinea(linea.id, payload);
-      onSave(updated); // siempre pasa el objeto actualizado
+      onSave(updated);
     } catch (e) {
       console.error("Error guardando línea tracker:", e);
       alert("Error al guardar. Revisá la consola.");
@@ -726,12 +739,10 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
   const handleConfirmarEntrega = async () => {
     setSaving(true);
     try {
-      const payload = {
-        ...form,
+      const payload = buildPayload({
         status: "entregado",
         fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0],
-        costo_real: form.costo_real ? parseFloat(form.costo_real) : null,
-      };
+      });
       const updated = await api.actualizarTrackerLinea(linea.id, payload);
       onSave(updated);
     } catch (e) {
