@@ -2416,8 +2416,7 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
               <button className="btn btn-ghost btn-sm" onClick={() => setItemsManuales([...itemsManuales, blankManual()])}>+ Agregar ítem manual</button>
             </div>
           ) : (
-          </div>
-
+            <div>
           {/* Filtro búsqueda y temperatura */}
           <div className="filter-row" style={{ marginBottom: 12 }}>
             <input className="filter-input" placeholder="🔍 Buscar ítem..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={{ minWidth: 200 }} />
@@ -2486,7 +2485,7 @@ function PageViveresNuevo({ notify, onSaved, onCancel }) {
               </table>
             </div>
           </div>
-          {/* cierre del else de ingreso manual */}
+            </div>
           )}
 
           {/* CARRITO FLOTANTE */}
