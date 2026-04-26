@@ -2621,6 +2621,9 @@ function PageViveresCatalogo({ notify }) {
   const [loading, setLoading] = useState(true);
   const [busqueda, setBusqueda] = useState("");
   const [filtroCateg, setFiltroCateg] = useState("");
+  const [modal, setModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ codigo: "", categoria: "Almacén", subcategoria: "", temperatura: "Seco", descripcion: "", unidad: "Unidad", volumen_peso: "" });
 
   useEffect(() => {
     apiViveres.getCatalogo().then(d => { setCatalogo(d); setLoading(false); });
@@ -2633,6 +2636,28 @@ function PageViveresCatalogo({ notify }) {
     return true;
   });
 
+  const handleGuardar = async () => {
+    if (!form.descripcion.trim()) return alert("La descripción es obligatoria");
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.from("viveres_catalogo").insert([{
+        ...form,
+        volumen_peso: form.volumen_peso ? parseFloat(form.volumen_peso) : null,
+        activo: true,
+      }]).select().single();
+      if (error) throw error;
+      setCatalogo(prev => [...prev, data]);
+      setModal(false);
+      setForm({ codigo: "", categoria: "Almacén", subcategoria: "", temperatura: "Seco", descripcion: "", unidad: "Unidad", volumen_peso: "" });
+      notify("Ítem agregado al catálogo", "success");
+    } catch (e) {
+      console.error(e);
+      alert("Error al guardar: " + e.message);
+    } finally { setSaving(false); }
+  };
+
+  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
   return (
     <div>
       <div className="filter-row mb12">
@@ -2643,6 +2668,7 @@ function PageViveresCatalogo({ notify }) {
         </select>
         {(busqueda || filtroCateg) && <button className="btn btn-ghost btn-sm" onClick={() => { setBusqueda(""); setFiltroCateg(""); }}>✕ Limpiar</button>}
         <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{filtrado.length} de {catalogo.length}</span>
+        <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar ítem</button>
       </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
@@ -2676,6 +2702,58 @@ function PageViveresCatalogo({ notify }) {
           </div>
         </div>
       }
+
+      {/* Modal nuevo ítem catálogo */}
+      {modal && (
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <div className="mhdr">
+              <div className="mtitle">Agregar ítem al catálogo</div>
+              <button className="mclose" onClick={() => setModal(false)}>✕</button>
+            </div>
+            <div className="mbody">
+              <div className="form-grid">
+                <FG label="Código (opcional)">
+                  <input value={form.codigo} onChange={e => setF("codigo", e.target.value)} placeholder="Ej: NAV001" />
+                </FG>
+                <FG label="Temperatura *">
+                  <select value={form.temperatura} onChange={e => setF("temperatura", e.target.value)}>
+                    <option>Seco</option>
+                    <option>Refrigerado</option>
+                    <option>Congelado</option>
+                  </select>
+                </FG>
+                <FG label="Categoría *">
+                  <select value={form.categoria} onChange={e => setF("categoria", e.target.value)}>
+                    {categorias.map(c => <option key={c}>{c}</option>)}
+                    <option>Otro</option>
+                  </select>
+                </FG>
+                <FG label="Subcategoría">
+                  <input value={form.subcategoria} onChange={e => setF("subcategoria", e.target.value)} placeholder="Ej: Aceite/Aceto/Vinagre" />
+                </FG>
+              </div>
+              <FG label="Descripción *" full>
+                <input value={form.descripcion} onChange={e => setF("descripcion", e.target.value)} placeholder="Nombre completo del producto" />
+              </FG>
+              <div className="form-grid mt12">
+                <FG label="Unidad">
+                  <select value={form.unidad} onChange={e => setF("unidad", e.target.value)}>
+                    {["Unidad", "Kg", "Litros", "Caja", "Bolsa", "Atados", "Cajon", "Ristra"].map(u => <option key={u}>{u}</option>)}
+                  </select>
+                </FG>
+                <FG label="Volumen/Peso por unidad" hint="En kg o litros, para el cálculo de dieta">
+                  <input type="number" value={form.volumen_peso} onChange={e => setF("volumen_peso", e.target.value)} placeholder="Ej: 1, 0.5, 2.5" />
+                </FG>
+              </div>
+            </div>
+            <div className="mftr">
+              <button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handleGuardar} disabled={saving}>{saving ? "Guardando..." : "Agregar al catálogo"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
