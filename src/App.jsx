@@ -691,9 +691,15 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
 
   const handleUpdate = (updated) => setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r).filter(r => ["pendiente_revision", "en_revision"].includes(r.status)));
 
-  const handleMoverTracker = (req) => {
+  const handleMoverTracker = async (req) => {
     setSelected(null);
-    setConsolidando(req);
+    // Fetch fresh req with items to ensure requisicion_items is loaded
+    try {
+      const fresh = await api.getRequisicion(req.id);
+      setConsolidando(fresh);
+    } catch {
+      setConsolidando(req);
+    }
   };
 
   const handleConsolidado = () => {
