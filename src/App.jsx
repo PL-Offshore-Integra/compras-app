@@ -684,8 +684,17 @@ function RechazarModal({ req, onClose, onSave }) {
 }
 
 // ─── MODAL: EDITAR LÍNEA TRACKER ─────────────────────────────────────────────
-// E3 fix: handleSave ahora llama onSave con el objeto actualizado + notif funciona
 function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
+  const emptyCotiz = () => ({ proveedor: "", precio: "", moneda: "ARS", plazo: "" });
+  const initCotiz = () => {
+    const c = linea.cotizaciones || {};
+    return [
+      c.c1 || emptyCotiz(),
+      c.c2 || emptyCotiz(),
+      c.c3 || emptyCotiz(),
+    ];
+  };
+
   const [form, setForm] = useState({
     descripcion: linea.descripcion || "",
     proveedor_elegido: linea.proveedor_elegido || "",
@@ -699,26 +708,46 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
     status: linea.status || "en_cotizacion",
     notas: linea.notas || "",
   });
+  const [cotiz, setCotiz] = useState(initCotiz());
+  const [adjuntos, setAdjuntos] = useState(linea.cotizaciones?.adjuntos || []);
+  const [uploading, setUploading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [saving, setSaving] = useState(false);
+  const fileRef = useRef();
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setCotizField = (idx, k, v) => {
+    const next = cotiz.map((c, i) => i === idx ? { ...c, [k]: v } : c);
+    setCotiz(next);
+    // Si es la cotización elegida (idx=0), auto-completar campos principales
+    if (idx === 0) {
+      if (k === "proveedor") set("proveedor_elegido", v);
+      if (k === "precio") set("costo_real", v);
+      if (k === "moneda") set("moneda_real", v);
+      if (k === "plazo") set("plazo_pago", v);
+    }
+  };
 
-  // Limpia strings vacíos en campos opcionales para que Supabase reciba null
   const buildPayload = (overrides = {}) => {
     const f = { ...form, ...overrides };
     return {
-      descripcion:          f.descripcion || null,
-      proveedor_elegido:    f.proveedor_elegido || null,
-      motivo_proveedor:     f.motivo_proveedor || null,
-      nro_oc:               f.nro_oc || null,
-      costo_real:           f.costo_real !== "" && f.costo_real != null ? parseFloat(f.costo_real) : null,
-      moneda_real:          f.moneda_real || "ARS",
-      plazo_pago:           f.plazo_pago || null,
-      fecha_entrega_prom:   f.fecha_entrega_prom || null,
-      fecha_entrega_real:   f.fecha_entrega_real || null,
-      status:               f.status || "en_cotizacion",
-      notas:                f.notas || null,
+      descripcion:        f.descripcion || null,
+      proveedor_elegido:  f.proveedor_elegido || null,
+      motivo_proveedor:   f.motivo_proveedor || null,
+      nro_oc:             f.nro_oc || null,
+      costo_real:         f.costo_real !== "" && f.costo_real != null ? parseFloat(f.costo_real) : null,
+      moneda_real:        f.moneda_real || "ARS",
+      plazo_pago:         f.plazo_pago || null,
+      fecha_entrega_prom: f.fecha_entrega_prom || null,
+      fecha_entrega_real: f.fecha_entrega_real || null,
+      status:             f.status || "en_cotizacion",
+      notas:              f.notas || null,
+      cotizaciones: {
+        c1: cotiz[0],
+        c2: cotiz[1],
+        c3: cotiz[2],
+        adjuntos,
+      },
     };
   };
 
@@ -731,9 +760,7 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
     } catch (e) {
       console.error("Error guardando línea tracker:", e);
       alert("Error al guardar. Revisá la consola.");
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   const handleConfirmarEntrega = async () => {
@@ -748,13 +775,44 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
     } catch (e) {
       console.error("Error confirmando entrega:", e);
       alert("Error al confirmar entrega.");
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
+  };
+
+  const handleUpload = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      const nuevos = [];
+      for (const file of Array.from(files)) {
+        const path = `${linea.id}/${Date.now()}_${file.name}`;
+        const { error } = await supabase.storage.from("cotizaciones").upload(path, file, { upsert: true });
+        if (error) throw error;
+        const { data: urlData } = supabase.storage.from("cotizaciones").getPublicUrl(path);
+        nuevos.push({ nombre: file.name, url: urlData.publicUrl, path });
+      }
+      setAdjuntos(prev => [...prev, ...nuevos]);
+    } catch (e) {
+      console.error("Error subiendo archivo:", e);
+      alert("Error al subir el archivo. Revisá la consola.");
+    } finally { setUploading(false); }
+  };
+
+  const handleDeleteAdjunto = async (adj) => {
+    await supabase.storage.from("cotizaciones").remove([adj.path]);
+    setAdjuntos(prev => prev.filter(a => a.path !== adj.path));
   };
 
   const req = linea.requisiciones;
   const itemsDetalle = linea.items_detalle || [];
+  const costoEstimado = req?.costo_estimado;
+  const monedaEstimada = req?.moneda_estimada || "ARS";
+
+  const COTIZ_LABELS = ["Cotización elegida", "Cotización 2", "Cotización 3"];
+  const COTIZ_STYLES = [
+    { border: "2px solid var(--accent2)", background: "#F0FDF4" },
+    { border: "1px solid var(--border)", background: "var(--surface2)" },
+    { border: "1px solid var(--border)", background: "var(--surface2)" },
+  ];
 
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -767,6 +825,7 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             </div>
             {req && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
               REQ-{String(req.nro_solicitud).padStart(4, "0")} · {req.empresa} · {req.base_buque}
+              {costoEstimado && <span style={{ marginLeft: 8, color: "var(--warn)" }}>Estimado: {fmt(costoEstimado, monedaEstimada)}</span>}
             </div>}
           </div>
           <button className="mclose" onClick={onClose}>✕</button>
@@ -778,8 +837,7 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             </button>
             {showDetail && <div className="detail-items mt8">
               {itemsDetalle.map((it, i) => <div key={i} className="detail-item-row">
-                <span className="text-muted">·</span>
-                <span>{it.descripcion}</span>
+                <span className="text-muted">·</span><span>{it.descripcion}</span>
                 <span className="text-muted">×{it.cantidad} {it.unidad}</span>
               </div>)}
             </div>}
@@ -797,9 +855,52 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             </FG>
           </div>
 
-          <div className="form-section">Proveedor y OC</div>
+          {/* COTIZACIONES — 3 columnas */}
+          <div className="form-section">Cotizaciones</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+            {cotiz.map((c, i) => (
+              <div key={i} style={{ borderRadius: "var(--r2)", padding: "12px 14px", ...COTIZ_STYLES[i] }}>
+                <div style={{ fontFamily: "var(--sans)", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>
+                  {i === 0 && <span style={{ marginRight: 4 }}>⭐</span>}{COTIZ_LABELS[i]}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <FG label="Proveedor">
+                    <select value={c.proveedor} onChange={e => setCotizField(i, "proveedor", e.target.value)} style={{ fontSize: 12 }}>
+                      <option value="">Seleccionar...</option>
+                      {proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+                    </select>
+                  </FG>
+                  <FG label="Precio">
+                    <input type="number" value={c.precio} onChange={e => setCotizField(i, "precio", e.target.value)} style={{ fontSize: 12 }} />
+                  </FG>
+                  <FG label="Moneda">
+                    <select value={c.moneda} onChange={e => setCotizField(i, "moneda", e.target.value)} style={{ fontSize: 12 }}>
+                      <option>ARS</option><option>USD</option>
+                    </select>
+                  </FG>
+                  <FG label="Plazo de pago">
+                    <select value={c.plazo} onChange={e => setCotizField(i, "plazo", e.target.value)} style={{ fontSize: 12 }}>
+                      <option value="">Seleccionar...</option>
+                      {PLAZO_PAGO_OPTIONS.map(p => <option key={p}>{p}</option>)}
+                    </select>
+                  </FG>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Comparación vs estimado */}
+          {costoEstimado && form.costo_real && (
+            <div className={`info-box mb12 ${parseFloat(form.costo_real) > costoEstimado ? "warn" : "accent"}`} style={{ fontSize: 11 }}>
+              {parseFloat(form.costo_real) > costoEstimado
+                ? `⚠ Costo real (${fmt(parseFloat(form.costo_real), form.moneda_real)}) supera el estimado (${fmt(costoEstimado, monedaEstimada)}) en ${fmt(parseFloat(form.costo_real) - costoEstimado, form.moneda_real)}`
+                : `✓ Costo real (${fmt(parseFloat(form.costo_real), form.moneda_real)}) dentro del presupuesto estimado (${fmt(costoEstimado, monedaEstimada)})`
+              }
+            </div>
+          )}
+
+          <div className="form-section">Justificación y OC</div>
           <div className="form-grid">
-            {/* E5 FIX: proveedor_elegido lee de la tabla proveedores */}
             <FG label="Proveedor elegido">
               <select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}>
                 <option value="">Seleccionar proveedor...</option>
@@ -810,8 +911,8 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
               <input value={form.nro_oc} onChange={e => set("nro_oc", e.target.value)} placeholder="OC-0001" />
             </FG>
           </div>
-          <FG label="Justificación elección proveedor">
-            <textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} />
+          <FG label="¿Por qué elegiste este proveedor sobre los demás?">
+            <textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} placeholder="Ej: Mejor precio, plazo de entrega más corto, proveedor habitual con buena performance..." />
           </FG>
 
           <div className="form-section">Precio y entrega</div>
@@ -828,6 +929,27 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             <FG label="Entrega real"><input type="date" value={form.fecha_entrega_real} onChange={e => set("fecha_entrega_real", e.target.value)} /></FG>
           </div>
           <FG label="Notas"><textarea value={form.notas} onChange={e => set("notas", e.target.value)} /></FG>
+
+          {/* ADJUNTOS */}
+          <div className="form-section">Presupuestos adjuntos</div>
+          <input ref={fileRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.doc,.docx" style={{ display: "none" }} onChange={e => handleUpload(e.target.files)} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>
+              {uploading ? "⏳ Subiendo..." : "📎 Adjuntar archivo"}
+            </button>
+            <span style={{ fontSize: 10, color: "var(--muted2)" }}>PDF, imagen o Excel</span>
+          </div>
+          {adjuntos.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              {adjuntos.map((adj, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px" }}>
+                  <span style={{ fontSize: 14 }}>📄</span>
+                  <a href={adj.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none", flex: 1 }}>{adj.nombre}</a>
+                  <button onClick={() => handleDeleteAdjunto(adj)} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer", fontSize: 14 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
@@ -1230,6 +1352,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
         "N° OC": l.nro_oc || "",
         "Justificación proveedor": l.motivo_proveedor || "",
         "Costo real": l.costo_real || "",
+        "Costo estimado": req?.costo_estimado || "",
         "Moneda": l.moneda_real || "",
         "Plazo de pago": l.plazo_pago || "",
         "Entrega prometida": l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : "",
@@ -1302,7 +1425,8 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                   <th className="sortable" onClick={() => handleSort("status")}>Estado<SortIcon col="status" /></th>
                   <th className="sortable" onClick={() => handleSort("proveedor")}>Proveedor<SortIcon col="proveedor" /></th>
                   <th>OC</th>
-                  <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th className="sortable" onClick={() => handleSort("costo")}>Costo real<SortIcon col="costo" /></th>
+                  <th>Costo est.</th>
                   <th>Moneda</th>
                   <th>Plazo pago</th>
                   <th className="sortable" onClick={() => handleSort("entrega")}>Entrega prom.<SortIcon col="entrega" /></th>
@@ -1337,6 +1461,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                       <td style={{ fontSize: 12 }}>{l.proveedor_elegido || <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                       <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                       <td className="text-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{l.costo_real != null ? new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(l.costo_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td className="text-mono" style={{ fontSize: 12, whiteSpace: "nowrap", color: "var(--muted)" }}>{req?.costo_estimado != null ? new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(req.costo_estimado) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                       <td style={{ fontSize: 11, color: "var(--muted)" }}>{l.moneda_real || "—"}</td>
                       <td style={{ fontSize: 11, color: "var(--muted)" }}>{l.plazo_pago || "—"}</td>
                       <td style={{ fontSize: 12, color: "var(--warn)", whiteSpace: "nowrap" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
