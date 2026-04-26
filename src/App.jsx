@@ -2022,9 +2022,530 @@ function PageProveedores({ notify }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  ROOT APP
-// ═══════════════════════════════════════════════════════════════════════════
+// ─── API VÍVERES ──────────────────────────────────────────────────────────────
+const apiViveres = {
+  async getCatalogo() {
+    const { data, error } = await supabase.from("viveres_catalogo").select("*").eq("activo", true).order("categoria").order("subcategoria").order("descripcion");
+    if (error) throw error;
+    return data || [];
+  },
+  async getParametros() {
+    const { data, error } = await supabase.from("viveres_parametros_dieta").select("*");
+    if (error) throw error;
+    return data || [];
+  },
+  async getPedidos(filtros = {}) {
+    let q = supabase.from("viveres_pedidos").select("*, viveres_pedido_items(*)").order("created_at", { ascending: false });
+    if (filtros.empresa) q = q.eq("empresa", filtros.empresa);
+    if (filtros.base_buque) q = q.eq("base_buque", filtros.base_buque);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+  async crearPedido(pedido, items) {
+    const { data: nuevo, error } = await supabase.from("viveres_pedidos").insert([pedido]).select().single();
+    if (error) throw error;
+    if (items?.length) {
+      await supabase.from("viveres_pedido_items").insert(items.map(it => ({ ...it, pedido_id: nuevo.id })));
+    }
+    return nuevo;
+  },
+  async actualizarPedido(id, cambios) {
+    const { data, error } = await supabase.from("viveres_pedidos").update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async actualizarItems(pedidoId, items) {
+    await supabase.from("viveres_pedido_items").delete().eq("pedido_id", pedidoId);
+    if (items?.length) await supabase.from("viveres_pedido_items").insert(items.map(it => ({ ...it, pedido_id: pedidoId })));
+  },
+};
+
+// ─── MAPA CATEGORÍA → GRUPO DIETA ────────────────────────────────────────────
+const CATEGORIA_A_GRUPO_DIETA = {
+  "Carnicería": "Carniceria",
+  "Fiambrería": "Fiambreria",
+  "Pescadería": "Pescaderia",
+  "Verdulería": "Verduras",
+  "Lacteos": "Frutas", // sin parámetro específico
+};
+
+const TEMP_COLOR = {
+  "Seco": { bg: "#FEF9C3", color: "#92400E", border: "#FDE68A", dot: "#EAB308" },
+  "Refrigerado": { bg: "#DBEAFE", color: "#1E40AF", border: "#BFDBFE", dot: "#3B82F6" },
+  "Congelado": { bg: "#EDE9FE", color: "#4C1D95", border: "#DDD6FE", dot: "#8B5CF6" },
+  "Congelados": { bg: "#EDE9FE", color: "#4C1D95", border: "#DDD6FE", dot: "#8B5CF6" },
+};
+
+// ─── PAGE: VÍVERES — NUEVO PEDIDO ────────────────────────────────────────────
+function PageViveresNuevo({ notify, onSaved, onCancel }) {
+  const [step, setStep] = useState(1); // 1: cabecera, 2: ítems
+  const [catalogo, setCatalogo] = useState([]);
+  const [parametros, setParametros] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [cabecera, setCabecera] = useState({
+    empresa: "Parana Logistica",
+    base_buque: "",
+    pax: 12,
+    dias: 15,
+    fecha_pedido: new Date().toISOString().split("T")[0],
+    fecha_necesaria: "",
+    solicitado_por: "",
+    observaciones: "",
+  });
+
+  // items: { catalogo_id, descripcion, categoria, subcategoria, temperatura, unidad, volumen_peso, stock_actual, cantidad_pedida }
+  const [items, setItems] = useState([]);
+  const [filtroCateg, setFiltroCateg] = useState("");
+  const [filtroTemp, setFiltroTemp] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => {
+    Promise.all([apiViveres.getCatalogo(), apiViveres.getParametros()]).then(([cat, par]) => {
+      setCatalogo(cat);
+      // Inicializar items desde catálogo con stock=0 y cantidad=0
+      setItems(cat.map(c => ({
+        catalogo_id: c.id,
+        descripcion: c.descripcion,
+        categoria: c.categoria,
+        subcategoria: c.subcategoria || "",
+        temperatura: c.temperatura || "",
+        unidad: c.unidad || "Unidad",
+        volumen_peso: c.volumen_peso || 1,
+        stock_actual: 0,
+        cantidad_pedida: 0,
+      })));
+      setParametros(par);
+      setLoading(false);
+    });
+  }, []);
+
+  const setCab = (k, v) => setCabecera(c => ({ ...c, [k]: v }));
+  const setItem = (id, k, v) => setItems(prev => prev.map(it => it.catalogo_id === id ? { ...it, [k]: parseFloat(v) || 0 } : it));
+
+  const paxDias = (cabecera.pax || 0) * (cabecera.dias || 0);
+
+  // Calcular kg/persona/día por grupo de dieta
+  const calcDieta = () => {
+    const grupos = {};
+    items.forEach(it => {
+      if (!it.cantidad_pedida && !it.stock_actual) return;
+      const total = (it.stock_actual || 0) + (it.cantidad_pedida || 0);
+      const kgTotal = total * (it.volumen_peso || 1);
+      const kgPaxDia = paxDias > 0 ? kgTotal / paxDias : 0;
+      const cat = it.categoria;
+      if (!grupos[cat]) grupos[cat] = 0;
+      grupos[cat] += kgPaxDia;
+    });
+    return grupos;
+  };
+
+  const dietaActual = calcDieta();
+
+  const getDietaParam = (categoria) => {
+    const grupo = CATEGORIA_A_GRUPO_DIETA[categoria] || categoria;
+    return parametros.find(p => p.grupo === grupo || p.grupo === categoria);
+  };
+
+  const getDietaStatus = (categoria) => {
+    const param = getDietaParam(categoria);
+    const val = dietaActual[categoria] || 0;
+    if (!param) return "gray";
+    if (val === 0) return "yellow";
+    if (val < param.min) return "red";
+    if (val > param.max) return "red";
+    return "green";
+  };
+
+  // Filtrar ítems para mostrar
+  const itemsFiltrados = items.filter(it => {
+    if (filtroCateg && it.categoria !== filtroCateg) return false;
+    if (filtroTemp && it.temperatura !== filtroTemp) return false;
+    if (busqueda && !it.descripcion.toLowerCase().includes(busqueda.toLowerCase())) return false;
+    return true;
+  });
+
+  const categorias = [...new Set(catalogo.map(c => c.categoria))].sort();
+  const temperaturas = [...new Set(catalogo.map(c => c.temperatura).filter(Boolean))];
+
+  // Items con cantidad pedida > 0
+  const itemsConPedido = items.filter(it => it.cantidad_pedida > 0);
+
+  const handleGuardar = async (status = "borrador") => {
+    if (!cabecera.base_buque || !cabecera.solicitado_por) {
+      alert("Completá Base/Buque y Solicitado por");
+      return;
+    }
+    setSaving(true);
+    try {
+      const itemsAGuardar = items.filter(it => it.cantidad_pedida > 0 || it.stock_actual > 0);
+      const pedido = await apiViveres.crearPedido({ ...cabecera, status }, itemsAGuardar);
+
+      // Si se envía, crear requisición automáticamente
+      if (status === "enviado") {
+        const reqItems = itemsConPedido.map(it => ({
+          descripcion: it.descripcion,
+          cantidad: it.cantidad_pedida,
+          unidad: it.unidad,
+          stock_disponible: it.stock_actual,
+          proveedor_sugerido: "",
+        }));
+        const req = await api.crearRequisicion({
+          titulo: `Víveres ${cabecera.base_buque} — ${cabecera.pax} PAX × ${cabecera.dias} días`,
+          empresa: cabecera.empresa,
+          base_buque: cabecera.base_buque,
+          area: "Catering",
+          tipo_requisicion: "Víveres",
+          urgencia: "Normal",
+          solicitado_por: cabecera.solicitado_por,
+          fecha_necesaria: cabecera.fecha_necesaria || null,
+          observaciones: cabecera.observaciones || null,
+        }, reqItems);
+        await apiViveres.actualizarPedido(pedido.id, { requisicion_id: req.id });
+        notify("Pedido enviado al Inbox del comprador", "success");
+      } else {
+        notify("Borrador guardado", "info");
+      }
+      onSaved();
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return <div className="loading"><span className="spin">◌</span> Cargando catálogo...</div>;
+
+  return (
+    <div>
+      {/* STEP 1: CABECERA */}
+      {step === 1 && (
+        <div className="card">
+          <div className="card-title">Datos del pedido</div>
+          <div className="form-grid-3">
+            <FG label="Empresa *">
+              <select value={cabecera.empresa} onChange={e => setCab("empresa", e.target.value)}>
+                {EMPRESAS.map(e => <option key={e}>{e}</option>)}
+              </select>
+            </FG>
+            <FG label="Base / Buque *">
+              <select value={cabecera.base_buque} onChange={e => setCab("base_buque", e.target.value)}>
+                <option value="">Seleccionar...</option>
+                {(BASES_POR_EMPRESA[cabecera.empresa] || []).map(b => <option key={b}>{b}</option>)}
+              </select>
+            </FG>
+            <FG label="Solicitado por *">
+              <input value={cabecera.solicitado_por} onChange={e => setCab("solicitado_por", e.target.value)} placeholder="Nombre del cocinero/encargado" />
+            </FG>
+          </div>
+          <div className="form-grid">
+            <FG label="PAX (personas a bordo)">
+              <input type="number" value={cabecera.pax} onChange={e => setCab("pax", parseInt(e.target.value) || 0)} min={1} />
+            </FG>
+            <FG label="Días de navegación">
+              <input type="number" value={cabecera.dias} onChange={e => setCab("dias", parseInt(e.target.value) || 0)} min={1} />
+            </FG>
+            <FG label="Fecha del pedido">
+              <input type="date" value={cabecera.fecha_pedido} onChange={e => setCab("fecha_pedido", e.target.value)} />
+            </FG>
+            <FG label="Fecha necesaria">
+              <input type="date" value={cabecera.fecha_necesaria} onChange={e => setCab("fecha_necesaria", e.target.value)} />
+            </FG>
+          </div>
+          <FG label="Observaciones">
+            <textarea value={cabecera.observaciones} onChange={e => setCab("observaciones", e.target.value)} placeholder="Notas adicionales para el comprador..." />
+          </FG>
+
+          {cabecera.pax > 0 && cabecera.dias > 0 && (
+            <div className="info-box accent mt12" style={{ fontSize: 12 }}>
+              Total: <strong>{cabecera.pax} PAX × {cabecera.dias} días = {paxDias} raciones</strong>
+            </div>
+          )}
+
+          <div className="flex-gap mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
+            <button className="btn btn-primary" onClick={() => {
+              if (!cabecera.base_buque || !cabecera.solicitado_por) { alert("Completá Base/Buque y Solicitado por"); return; }
+              setStep(2);
+            }}>Continuar → Cargar ítems</button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2: ÍTEMS */}
+      {step === 2 && (
+        <div>
+          {/* Header con datos y semáforo de dieta */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+            <div className="card" style={{ margin: 0 }}>
+              <div className="card-title">Datos del pedido</div>
+              <div style={{ fontSize: 13, color: "var(--tm-navy)", fontWeight: 600 }}>{cabecera.base_buque}</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {cabecera.empresa} · {cabecera.pax} PAX · {cabecera.dias} días · <strong>{paxDias} raciones</strong>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Por: {cabecera.solicitado_por}</div>
+              <button className="btn btn-ghost btn-sm mt8" onClick={() => setStep(1)}>← Editar datos</button>
+            </div>
+            <div className="card" style={{ margin: 0 }}>
+              <div className="card-title">Control de dieta — kg/persona/día</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {parametros.map(p => {
+                  const catKey = Object.entries(CATEGORIA_A_GRUPO_DIETA).find(([, v]) => v === p.grupo)?.[0] || p.grupo;
+                  const val = dietaActual[catKey] || 0;
+                  const status = val === 0 ? "yellow" : val < p.min ? "red" : val > p.max ? "red" : "green";
+                  const colors = { green: { bg: "#D1FAE5", color: "#065F46" }, red: { bg: "#FEE2E2", color: "#991B1B" }, yellow: { bg: "#FEF9C3", color: "#92400E" } };
+                  return (
+                    <div key={p.grupo} style={{ background: colors[status].bg, borderRadius: "var(--r)", padding: "5px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: colors[status].color, fontWeight: 600 }}>{p.grupo}</span>
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: colors[status].color }}>
+                        {val.toFixed(2)} / {p.max} {p.unidad_medida}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Filtros */}
+          <div className="filter-row" style={{ marginBottom: 12 }}>
+            <input className="filter-input" placeholder="🔍 Buscar ítem..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={{ minWidth: 200 }} />
+            <select className="filter-select" value={filtroCateg} onChange={e => setFiltroCateg(e.target.value)}>
+              <option value="">Todas las categorías</option>
+              {categorias.map(c => <option key={c}>{c}</option>)}
+            </select>
+            <select className="filter-select" value={filtroTemp} onChange={e => setFiltroTemp(e.target.value)}>
+              <option value="">Todas las temperaturas</option>
+              {temperaturas.map(t => <option key={t}>{t}</option>)}
+            </select>
+            {(filtroCateg || filtroTemp || busqueda) && (
+              <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroCateg(""); setFiltroTemp(""); setBusqueda(""); }}>✕ Limpiar</button>
+            )}
+            <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
+              {itemsConPedido.length} ítems pedidos · {itemsFiltrados.length} visibles
+            </span>
+          </div>
+
+          {/* Tabla de ítems */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div className="table-wrap">
+              <table className="tracker-table">
+                <thead>
+                  <tr>
+                    <th>Temp.</th>
+                    <th>Categoría</th>
+                    <th>Descripción</th>
+                    <th>Unidad</th>
+                    <th style={{ width: 100 }}>Stock actual</th>
+                    <th style={{ width: 120 }}>Cantidad pedida</th>
+                    <th>Total</th>
+                    <th>kg/PAX/día</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsFiltrados.length === 0 ? (
+                    <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin ítems</td></tr>
+                  ) : itemsFiltrados.map(it => {
+                    const tc = TEMP_COLOR[it.temperatura] || { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB", dot: "#9CA3AF" };
+                    const total = (it.stock_actual || 0) + (it.cantidad_pedida || 0);
+                    const kgPaxDia = paxDias > 0 ? (total * (it.volumen_peso || 1)) / paxDias : 0;
+                    return (
+                      <tr key={it.catalogo_id} style={{ background: it.cantidad_pedida > 0 ? "#F0FDF4" : "inherit" }}>
+                        <td>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, color: tc.color, background: tc.bg, border: `1px solid ${tc.border}`, borderRadius: 4, padding: "2px 6px" }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: tc.dot, display: "inline-block" }} />
+                            {it.temperatura}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.categoria}</td>
+                        <td style={{ fontWeight: it.cantidad_pedida > 0 ? 600 : 400, fontSize: 12 }}>{it.descripcion}</td>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.unidad}</td>
+                        <td>
+                          <input type="number" min={0} value={it.stock_actual || ""} placeholder="0"
+                            onChange={e => setItem(it.catalogo_id, "stock_actual", e.target.value)}
+                            style={{ width: 80, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none", textAlign: "right" }} />
+                        </td>
+                        <td>
+                          <input type="number" min={0} value={it.cantidad_pedida || ""} placeholder="0"
+                            onChange={e => setItem(it.catalogo_id, "cantidad_pedida", e.target.value)}
+                            style={{ width: 90, background: it.cantidad_pedida > 0 ? "#DCFCE7" : "var(--surface)", border: `1px solid ${it.cantidad_pedida > 0 ? "#86EFAC" : "var(--border)"}`, borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none", textAlign: "right", fontWeight: it.cantidad_pedida > 0 ? 700 : 400 }} />
+                        </td>
+                        <td className="text-mono" style={{ fontSize: 11, color: total > 0 ? "var(--tm-navy)" : "var(--muted2)" }}>{total > 0 ? total : "—"}</td>
+                        <td className="text-mono" style={{ fontSize: 11, color: kgPaxDia > 0 ? "var(--accent)" : "var(--muted2)" }}>{kgPaxDia > 0 ? kgPaxDia.toFixed(3) : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex-gap mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <button className="btn btn-ghost" onClick={() => setStep(1)}>← Volver</button>
+            <button className="btn btn-ghost" onClick={() => handleGuardar("borrador")} disabled={saving}>Guardar borrador</button>
+            <button className="btn btn-primary" onClick={() => handleGuardar("enviado")} disabled={saving || itemsConPedido.length === 0}>
+              {saving ? "Enviando..." : `Enviar al comprador (${itemsConPedido.length} ítems)`}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PAGE: VÍVERES — HISTORIAL ────────────────────────────────────────────────
+function PageViveresHistorial({ notify, onNuevo }) {
+  const [pedidos, setPedidos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    apiViveres.getPedidos().then(d => { setPedidos(d); setLoading(false); });
+  }, []);
+
+  const STATUS_PEDIDO = {
+    borrador: { label: "Borrador", color: "b-gray" },
+    enviado:  { label: "Enviado al comprador", color: "b-blue" },
+    aprobado: { label: "Aprobado", color: "b-green" },
+    rechazado:{ label: "Rechazado", color: "b-red" },
+  };
+
+  return (
+    <div>
+      <div className="flex-between mb12">
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>{pedidos.length} pedidos registrados</div>
+        <button className="btn btn-primary btn-sm" onClick={onNuevo}>+ Nuevo pedido</button>
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        pedidos.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>🚢</div>Sin pedidos de víveres aún</div> :
+        pedidos.map(p => {
+          const s = STATUS_PEDIDO[p.status] || { label: p.status, color: "b-gray" };
+          const itemsCantidad = (p.viveres_pedido_items || []).filter(it => it.cantidad_pedida > 0).length;
+          return (
+            <div key={p.id} className="req-row" onClick={() => setSelected(p)}>
+              <div className="flex-between mb8">
+                <div className="flex-gap">
+                  <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>{fmtDate(p.fecha_pedido)}</span>
+                  <span className={`badge ${s.color}`}>{s.label}</span>
+                </div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{p.empresa}</span>
+              </div>
+              <div className="req-title">{p.base_buque} — {p.pax} PAX × {p.dias} días</div>
+              <div className="req-meta">
+                <span>{p.solicitado_por}</span>
+                <span>·</span>
+                <span>{itemsCantidad} ítems pedidos</span>
+                {p.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Necesario: {fmtDate(p.fecha_necesaria)}</span></>}
+              </div>
+            </div>
+          );
+        })
+      }
+
+      {selected && (
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setSelected(null)}>
+          <div className="modal modal-lg">
+            <div className="mhdr">
+              <div>
+                <div className="mtitle">Pedido — {selected.base_buque}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  {selected.empresa} · {selected.pax} PAX · {selected.dias} días · Por: {selected.solicitado_por}
+                </div>
+              </div>
+              <button className="mclose" onClick={() => setSelected(null)}>✕</button>
+            </div>
+            <div className="mbody">
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Categoría</th><th>Descripción</th><th>Unidad</th><th>Stock</th><th>Pedido</th></tr></thead>
+                  <tbody>
+                    {(selected.viveres_pedido_items || []).filter(it => it.cantidad_pedida > 0 || it.stock_actual > 0).map((it, i) => (
+                      <tr key={i}>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.categoria}</td>
+                        <td style={{ fontWeight: 500 }}>{it.descripcion}</td>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.unidad}</td>
+                        <td className="text-mono">{it.stock_actual || 0}</td>
+                        <td className="text-mono" style={{ fontWeight: 700, color: "var(--accent2)" }}>{it.cantidad_pedida || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="mftr">
+              <button className="btn btn-ghost" onClick={() => setSelected(null)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PAGE: VÍVERES — CATÁLOGO ────────────────────────────────────────────────
+function PageViveresCatalogo({ notify }) {
+  const [catalogo, setCatalogo] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCateg, setFiltroCateg] = useState("");
+
+  useEffect(() => {
+    apiViveres.getCatalogo().then(d => { setCatalogo(d); setLoading(false); });
+  }, []);
+
+  const categorias = [...new Set(catalogo.map(c => c.categoria))].sort();
+  const filtrado = catalogo.filter(c => {
+    if (filtroCateg && c.categoria !== filtroCateg) return false;
+    if (busqueda && !c.descripcion.toLowerCase().includes(busqueda.toLowerCase()) && !c.codigo?.toLowerCase().includes(busqueda.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div>
+      <div className="filter-row mb12">
+        <input className="filter-input" placeholder="🔍 Buscar por descripción o código..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={{ minWidth: 250 }} />
+        <select className="filter-select" value={filtroCateg} onChange={e => setFiltroCateg(e.target.value)}>
+          <option value="">Todas las categorías</option>
+          {categorias.map(c => <option key={c}>{c}</option>)}
+        </select>
+        {(busqueda || filtroCateg) && <button className="btn btn-ghost btn-sm" onClick={() => { setBusqueda(""); setFiltroCateg(""); }}>✕ Limpiar</button>}
+        <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{filtrado.length} de {catalogo.length}</span>
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Código</th><th>Categoría</th><th>Subcategoría</th><th>Temp.</th><th>Descripción</th><th>Unidad</th></tr>
+              </thead>
+              <tbody>
+                {filtrado.map(c => {
+                  const tc = TEMP_COLOR[c.temperatura] || { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB", dot: "#9CA3AF" };
+                  return (
+                    <tr key={c.id}>
+                      <td className="text-mono" style={{ fontSize: 10, color: "var(--muted)" }}>{c.codigo || "—"}</td>
+                      <td style={{ fontSize: 12, color: "var(--muted)" }}>{c.categoria}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted2)" }}>{c.subcategoria || "—"}</td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, color: tc.color, background: tc.bg, border: `1px solid ${tc.border}`, borderRadius: 4, padding: "2px 6px" }}>
+                          <span style={{ width: 5, height: 5, borderRadius: "50%", background: tc.dot, display: "inline-block" }} />
+                          {c.temperatura}
+                        </span>
+                      </td>
+                      <td style={{ fontWeight: 500, fontSize: 12 }}>{c.descripcion}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted)" }}>{c.unidad || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+    </div>
+  );
+}
 export default function App() {
   const [page, setPage] = useState("inbox-parana");
   const [notif, setNotif] = useState(null);
@@ -2065,6 +2586,9 @@ export default function App() {
     "tracker-transito": "TRACKER — EN TRÁNSITO",
     "archivo-entregados": "ARCHIVO — ENTREGADOS",
     "archivo-rechazados": "ARCHIVO — RECHAZADOS",
+    "viveres-nuevo": "VÍVERES — NUEVO PEDIDO",
+    "viveres-historial": "VÍVERES — HISTORIAL",
+    "viveres-catalogo": "VÍVERES — CATÁLOGO",
     "nueva": "NUEVA REQUISICIÓN",
     "kpis": "KPIs & REPORTES",
     "proveedores": "PROVEEDORES",
@@ -2108,6 +2632,11 @@ export default function App() {
           <NI id="archivo-entregados" icon="✓" label="Entregados" sub />
           <NI id="archivo-rechazados" icon="✗" label="Rechazados" sub />
 
+          <div className="nav-section">Víveres</div>
+          <NI id="viveres-nuevo" icon="🛒" label="Nuevo Pedido" sub />
+          <NI id="viveres-historial" icon="📋" label="Historial" sub />
+          <NI id="viveres-catalogo" icon="📦" label="Catálogo" sub />
+
           <div className="nav-section">Gestión</div>
           <NI id="nueva" icon="✚" label="Nueva Requisición" />
           <NI id="kpis" icon="📊" label="KPIs & Reportes" />
@@ -2142,6 +2671,9 @@ export default function App() {
             {page === "archivo-entregados" && <PageArchivo tipo="entregados" />}
             {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-parana"); loadCounts(); }} onCancel={() => setPage("inbox-parana")} notify={notify} />}
+            {page === "viveres-nuevo" && <PageViveresNuevo notify={notify} onSaved={() => setPage("viveres-historial")} onCancel={() => setPage("viveres-historial")} />}
+            {page === "viveres-historial" && <PageViveresHistorial notify={notify} onNuevo={() => setPage("viveres-nuevo")} />}
+            {page === "viveres-catalogo" && <PageViveresCatalogo notify={notify} />}
             {page === "kpis" && <PageKPIs />}
             {page === "proveedores" && <PageProveedores notify={notify} />}
           </div>
