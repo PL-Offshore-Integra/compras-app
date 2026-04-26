@@ -546,7 +546,7 @@ function ConsolidarModal({ req, onClose, onSave }) {
         const itemsGrupo = items.filter((_, i) => asignaciones[i] === g);
         return {
           grupo: g,
-          descripcion: itemsGrupo.length === 1 ? itemsGrupo[0].descripcion : `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")}`,
+          descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")}`,
           items_detalle: itemsGrupo,
           status: "en_cotizacion",
         };
