@@ -974,9 +974,11 @@ function PageTracker({ statusFilter, notify }) {
   useEffect(() => { load(); }, [load]);
 
   const handleSave = (updated) => {
-    setLineas(prev => prev.map(l => l.id === updated.id ? { ...l, ...updated } : l));
     setSelected(null);
     notify("Línea actualizada", "success");
+    // E10 FIX: siempre recargamos desde Supabase para que las líneas
+    // que cambiaron de status desaparezcan correctamente de esta vista
+    // y los contadores del sidebar se actualicen
     load();
   };
 
@@ -1119,6 +1121,191 @@ function PageTracker({ statusFilter, notify }) {
         </div>
       }
 
+      {selected && <TrackerLineaModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} />}
+    </div>
+  );
+}
+
+// ─── PAGE: TRACKER GENERAL — todas las líneas, todos los estados ─────────────
+function PageTrackerGeneral({ notify, onNeedRefresh }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+  const [filtros, setFiltros] = useState({ empresa: "", status: "", proveedor: "", busqueda: "" });
+  const [sortCol, setSortCol] = useState("created_at");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "oc_emitida", "en_transito", "entregado"] }),
+        api.getProveedores()
+      ]);
+      setLineas(data);
+      setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = (updated) => {
+    setSelected(null);
+    notify("Línea actualizada", "success");
+    load();
+    onNeedRefresh();
+  };
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  const lineasFiltradas = lineas
+    .filter(l => {
+      const req = l.requisiciones;
+      if (filtros.empresa && req?.empresa !== filtros.empresa) return false;
+      if (filtros.status && l.status !== filtros.status) return false;
+      if (filtros.proveedor && l.proveedor_elegido !== filtros.proveedor) return false;
+      if (filtros.busqueda) {
+        const q = filtros.busqueda.toLowerCase();
+        if (!(
+          l.descripcion?.toLowerCase().includes(q) ||
+          req?.nro_solicitud?.toString().includes(q) ||
+          req?.base_buque?.toLowerCase().includes(q) ||
+          l.proveedor_elegido?.toLowerCase().includes(q) ||
+          l.nro_oc?.toLowerCase().includes(q)
+        )) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      let va, vb;
+      const ra = a.requisiciones, rb = b.requisiciones;
+      switch (sortCol) {
+        case "nro":        va = ra?.nro_solicitud || 0;   vb = rb?.nro_solicitud || 0; break;
+        case "descripcion":va = a.descripcion || "";       vb = b.descripcion || ""; break;
+        case "empresa":    va = ra?.empresa || "";         vb = rb?.empresa || ""; break;
+        case "buque":      va = ra?.base_buque || "";      vb = rb?.base_buque || ""; break;
+        case "status":     va = a.status || "";            vb = b.status || ""; break;
+        case "proveedor":  va = a.proveedor_elegido || ""; vb = b.proveedor_elegido || ""; break;
+        case "costo":      va = a.costo_real || 0;         vb = b.costo_real || 0; break;
+        case "entrega":    va = a.fecha_entrega_prom || ""; vb = b.fecha_entrega_prom || ""; break;
+        default:           va = a.created_at || "";        vb = b.created_at || "";
+      }
+      const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+  const SortIcon = ({ col }) => sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : " ·";
+  const empresasDisponibles = [...new Set(lineas.map(l => l.requisiciones?.empresa).filter(Boolean))];
+  const proveedoresDisponibles = [...new Set(lineas.map(l => l.proveedor_elegido).filter(Boolean))];
+
+  // Totales rápidos
+  const totalARS = lineas.filter(l => l.costo_real && (l.moneda_real === "ARS" || !l.moneda_real)).reduce((a, l) => a + l.costo_real, 0);
+  const totalUSD = lineas.filter(l => l.costo_real && l.moneda_real === "USD").reduce((a, l) => a + l.costo_real, 0);
+  const enCurso = lineas.filter(l => ["en_cotizacion","oc_emitida","en_transito"].includes(l.status)).length;
+  const entregadas = lineas.filter(l => l.status === "entregado").length;
+
+  return (
+    <div>
+      {/* Stats rápidos */}
+      <div className="stats" style={{ gridTemplateColumns: "repeat(4,1fr)", marginBottom: 16 }}>
+        <div className="stat"><div className="stat-label">Total líneas</div><div className="stat-value va">{lineas.length}</div></div>
+        <div className="stat"><div className="stat-label">En curso</div><div className="stat-value vm">{enCurso}</div></div>
+        <div className="stat"><div className="stat-label">Entregadas</div><div className="stat-value vg">{entregadas}</div></div>
+        <div className="stat">
+          <div className="stat-label">Comprometido</div>
+          <div style={{ marginTop: 4 }}>
+            {totalARS > 0 && <div className="text-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>{fmt(totalARS, "ARS")}</div>}
+            {totalUSD > 0 && <div className="text-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--accent2)" }}>{fmt(totalUSD, "USD")}</div>}
+            {totalARS === 0 && totalUSD === 0 && <div style={{ color: "var(--muted2)", fontSize: 12 }}>—</div>}
+          </div>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="filter-row">
+        <input className="filter-input" placeholder="🔍  Buscar..." value={filtros.busqueda} onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))} />
+        <select className="filter-select" value={filtros.status} onChange={e => setFiltros(f => ({ ...f, status: e.target.value }))}>
+          <option value="">Todos los estados</option>
+          {Object.entries(TRACKER_STATUS).filter(([k]) => k !== "archivado").map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <select className="filter-select" value={filtros.empresa} onChange={e => setFiltros(f => ({ ...f, empresa: e.target.value }))}>
+          <option value="">Todas las empresas</option>
+          {empresasDisponibles.map(e => <option key={e}>{e}</option>)}
+        </select>
+        <select className="filter-select" value={filtros.proveedor} onChange={e => setFiltros(f => ({ ...f, proveedor: e.target.value }))}>
+          <option value="">Todos los proveedores</option>
+          {proveedoresDisponibles.map(p => <option key={p}>{p}</option>)}
+        </select>
+        {(filtros.empresa || filtros.status || filtros.proveedor || filtros.busqueda) && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setFiltros({ empresa: "", status: "", proveedor: "", busqueda: "" })}>✕ Limpiar</button>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{lineasFiltradas.length} de {lineas.length}</span>
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>Sin líneas en el tracker</div> :
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="tracker-table">
+              <thead>
+                <tr>
+                  <th className="sortable" onClick={() => handleSort("nro")}>REQ<SortIcon col="nro" /></th>
+                  <th className="sortable" onClick={() => handleSort("descripcion")}>Descripción<SortIcon col="descripcion" /></th>
+                  <th className="sortable" onClick={() => handleSort("empresa")}>Empresa<SortIcon col="empresa" /></th>
+                  <th className="sortable" onClick={() => handleSort("buque")}>Base/Buque<SortIcon col="buque" /></th>
+                  <th>Urgencia</th>
+                  <th className="sortable" onClick={() => handleSort("status")}>Estado<SortIcon col="status" /></th>
+                  <th className="sortable" onClick={() => handleSort("proveedor")}>Proveedor<SortIcon col="proveedor" /></th>
+                  <th>OC</th>
+                  <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th>Plazo pago</th>
+                  <th className="sortable" onClick={() => handleSort("entrega")}>Entrega prom.<SortIcon col="entrega" /></th>
+                  <th>Entrega real</th>
+                  <th>Ítems</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineasFiltradas.length === 0 ? (
+                  <tr><td colSpan={13} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
+                ) : lineasFiltradas.map(l => {
+                  const req = l.requisiciones;
+                  const items = l.items_detalle || [];
+                  const entregadaTarde = l.fecha_entrega_prom && l.fecha_entrega_real && new Date(l.fecha_entrega_real) > new Date(l.fecha_entrega_prom);
+                  return (
+                    <tr key={l.id} onClick={() => setSelected(l)}>
+                      <td>
+                        <div className="flex-gap">
+                          <div className="grupo-chip">{l.grupo}</div>
+                          {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
+                        </div>
+                      </td>
+                      <td><div style={{ fontWeight: 600, fontSize: 12, color: "var(--tm-navy)", maxWidth: 200 }}>{l.descripcion}</div></td>
+                      <td><span className="tag">{req?.empresa || "—"}</span></td>
+                      <td style={{ color: "var(--muted)", fontSize: 12 }}>{req?.base_buque || "—"}</td>
+                      <td>{req ? <UrgBadge urgencia={req.urgencia} /> : "—"}</td>
+                      <td><TrackerBadge status={l.status} /></td>
+                      <td style={{ fontSize: 12 }}>{l.proveedor_elegido || <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td className="text-mono" style={{ fontSize: 12 }}>{l.costo_real ? fmt(l.costo_real, l.moneda_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted)" }}>{l.plazo_pago || "—"}</td>
+                      <td style={{ fontSize: 12, color: "var(--warn)" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td style={{ fontSize: 12, color: entregadaTarde ? "var(--danger)" : l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>
+                        {l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "—"}
+                        {entregadaTarde && <span style={{ fontSize: 9, marginLeft: 4 }}>⚠</span>}
+                      </td>
+                      <td><span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{items.length}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
       {selected && <TrackerLineaModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} />}
     </div>
   );
@@ -1397,50 +1584,60 @@ function PageKPIs() {
   );
 }
 
-// ─── PAGE: PROVEEDORES — E6: CRM con historial de compras ────────────────────
+// ─── PAGE: PROVEEDORES — CRM con historial, palabras clave y catálogo ────────
 function PageProveedores({ notify }) {
   const [provs, setProvs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
-  const [selected, setSelected] = useState(null); // proveedor seleccionado para ver detalle CRM
+  const [selected, setSelected] = useState(null);
   const [historial, setHistorial] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
-  const [form, setForm] = useState({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "" });
+
+  // form nuevo proveedor — incluye palabras_clave e items_catalogo
+  const [form, setForm] = useState({
+    nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "",
+    palabras_clave: "", // string separado por comas
+  });
+  const [itemsCatalogo, setItemsCatalogo] = useState([]); // array de { descripcion, unidad, precio_ref, moneda }
+  const blankItem = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", unidad: "Uni", precio_ref: "", moneda: "ARS" });
 
   useEffect(() => { api.getProveedores().then(d => { setProvs(d); setLoading(false); }); }, []);
 
   const handleSave = async () => {
     if (!form.nombre) return;
-    const nuevo = await api.crearProveedor({ ...form, activo: true });
+    const payload = {
+      ...form,
+      activo: true,
+      palabras_clave: form.palabras_clave || null,
+      items_catalogo: itemsCatalogo.filter(i => i.descripcion.trim()).map(({ id: _id, ...rest }) => ({
+        ...rest,
+        precio_ref: rest.precio_ref ? parseFloat(rest.precio_ref) : null,
+      })),
+    };
+    const nuevo = await api.crearProveedor(payload);
     setProvs(p => [...p, nuevo]);
     setModal(false);
-    setForm({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "" });
+    setForm({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" });
+    setItemsCatalogo([]);
     notify("Proveedor agregado", "success");
   };
 
-  // E6: al seleccionar proveedor, traer historial de compras desde tracker_lineas
   const handleSelectProveedor = async (prov) => {
     setSelected(prov);
     setHistLoading(true);
     try {
       const lineas = await api.getTrackerLineas({ proveedor: prov.nombre });
-      // Solo las que tienen precio (entregadas o con OC)
       setHistorial(lineas.filter(l => l.costo_real || l.nro_oc));
-    } finally {
-      setHistLoading(false);
-    }
+    } finally { setHistLoading(false); }
   };
 
-  // Stats del proveedor seleccionado
-  const totalCompras = historial.reduce((acc, l) => acc + (l.costo_real || 0), 0);
-  const comprasARS = historial.filter(l => l.moneda_real === "ARS" || !l.moneda_real);
-  const comprasUSD = historial.filter(l => l.moneda_real === "USD");
-  const totalARS = comprasARS.reduce((acc, l) => acc + (l.costo_real || 0), 0);
-  const totalUSD = comprasUSD.reduce((acc, l) => acc + (l.costo_real || 0), 0);
+  const totalARS = historial.filter(l => l.moneda_real === "ARS" || !l.moneda_real).reduce((a, l) => a + (l.costo_real || 0), 0);
+  const totalUSD = historial.filter(l => l.moneda_real === "USD").reduce((a, l) => a + (l.costo_real || 0), 0);
+
+  const setCI = (i, k, v) => { const its = [...itemsCatalogo]; its[i] = { ...its[i], [k]: v }; setItemsCatalogo(its); };
 
   return (
     <div>
-      {/* Vista detalle CRM de un proveedor */}
       {selected ? (
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
@@ -1449,7 +1646,6 @@ function PageProveedores({ notify }) {
             {selected.rubro && <span className="tag">{selected.rubro}</span>}
           </div>
 
-          {/* Info del proveedor */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
             <div className="card" style={{ margin: 0 }}>
               <div className="card-title">Datos de contacto</div>
@@ -1457,6 +1653,14 @@ function PageProveedores({ notify }) {
                 {selected.contacto && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>CONTACTO</span>{selected.contacto}</div>}
                 {selected.email && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>EMAIL</span><span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{selected.email}</span></div>}
                 {selected.telefono && <div><span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 2 }}>TELÉFONO</span><span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{selected.telefono}</span></div>}
+                {selected.palabras_clave && <div>
+                  <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "block", marginBottom: 6 }}>PALABRAS CLAVE</span>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {selected.palabras_clave.split(",").map(k => k.trim()).filter(Boolean).map((k, i) => (
+                      <span key={i} className="tag" style={{ background: "#EEF2FF", borderColor: "#C7D2FE", color: "var(--tm-blue)" }}>{k}</span>
+                    ))}
+                  </div>
+                </div>}
                 {selected.notas && <div className="info-box" style={{ fontSize: 12 }}>{selected.notas}</div>}
               </div>
             </div>
@@ -1482,6 +1686,26 @@ function PageProveedores({ notify }) {
             </div>
           </div>
 
+          {/* Catálogo de ítems del proveedor */}
+          {selected.items_catalogo?.length > 0 && (
+            <div className="card" style={{ marginBottom: 14 }}>
+              <div className="card-title">Catálogo de productos</div>
+              <table>
+                <thead><tr><th>Descripción</th><th>Unidad</th><th>Precio referencia</th><th>Moneda</th></tr></thead>
+                <tbody>
+                  {selected.items_catalogo.map((it, i) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 500 }}>{it.descripcion}</td>
+                      <td className="text-muted">{it.unidad || "—"}</td>
+                      <td className="text-mono">{it.precio_ref ? fmt(it.precio_ref, it.moneda || "ARS") : "—"}</td>
+                      <td className="text-muted">{it.moneda || "ARS"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Historial de compras */}
           <div className="card">
             <div className="card-title">Historial de compras</div>
@@ -1490,16 +1714,7 @@ function PageProveedores({ notify }) {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr>
-                      <th>REQ</th>
-                      <th>Artículo / Descripción</th>
-                      <th>Ítems</th>
-                      <th>OC</th>
-                      <th>Precio</th>
-                      <th>Entrega prometida</th>
-                      <th>Entrega real</th>
-                      <th>Estado</th>
-                    </tr>
+                    <tr><th>REQ</th><th>Descripción</th><th>Ítems</th><th>OC</th><th>Precio</th><th>Entrega prom.</th><th>Entrega real</th><th>Estado</th></tr>
                   </thead>
                   <tbody>
                     {historial.map(l => {
@@ -1507,36 +1722,13 @@ function PageProveedores({ notify }) {
                       const items = l.items_detalle || [];
                       return (
                         <tr key={l.id}>
-                          <td>
-                            {req && <div>
-                              <div className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</div>
-                              <div style={{ fontSize: 10, color: "var(--muted)" }}>{req.empresa}</div>
-                            </div>}
-                          </td>
-                          <td>
-                            <div style={{ fontWeight: 600, fontSize: 12, color: "var(--tm-navy)" }}>{l.descripcion}</div>
-                            {req?.base_buque && <div style={{ fontSize: 10, color: "var(--muted)" }}>{req.base_buque}</div>}
-                          </td>
-                          <td>
-                            {items.length > 0 ? (
-                              <div style={{ fontSize: 10, color: "var(--muted)", maxWidth: 180 }}>
-                                {items.slice(0, 2).map((it, i) => <div key={i}>· {it.descripcion} ×{it.cantidad}</div>)}
-                                {items.length > 2 && <div style={{ color: "var(--muted2)" }}>+{items.length - 2} más</div>}
-                              </div>
-                            ) : <span style={{ color: "var(--muted2)", fontSize: 11 }}>—</span>}
-                          </td>
-                          <td>
-                            {l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}
-                          </td>
-                          <td>
-                            {l.costo_real ? (
-                              <span className="text-mono" style={{ fontSize: 12, fontWeight: 600 }}>{fmt(l.costo_real, l.moneda_real || "ARS")}</span>
-                            ) : <span style={{ color: "var(--muted2)" }}>—</span>}
-                          </td>
+                          <td>{req && <div><div className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</div><div style={{ fontSize: 10, color: "var(--muted)" }}>{req.empresa}</div></div>}</td>
+                          <td><div style={{ fontWeight: 600, fontSize: 12 }}>{l.descripcion}</div>{req?.base_buque && <div style={{ fontSize: 10, color: "var(--muted)" }}>{req.base_buque}</div>}</td>
+                          <td>{items.length > 0 ? <div style={{ fontSize: 10, color: "var(--muted)", maxWidth: 160 }}>{items.slice(0, 2).map((it, i) => <div key={i}>· {it.descripcion} ×{it.cantidad}</div>)}{items.length > 2 && <div style={{ color: "var(--muted2)" }}>+{items.length - 2} más</div>}</div> : "—"}</td>
+                          <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : "—"}</td>
+                          <td>{l.costo_real ? <span className="text-mono" style={{ fontWeight: 600 }}>{fmt(l.costo_real, l.moneda_real || "ARS")}</span> : "—"}</td>
                           <td style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(l.fecha_entrega_prom)}</td>
-                          <td style={{ fontSize: 12, color: l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>
-                            {l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "Pendiente"}
-                          </td>
+                          <td style={{ fontSize: 12, color: l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>{l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "Pendiente"}</td>
                           <td><TrackerBadge status={l.status} /></td>
                         </tr>
                       );
@@ -1548,7 +1740,6 @@ function PageProveedores({ notify }) {
           </div>
         </div>
       ) : (
-        /* Lista de proveedores */
         <div className="card">
           <div className="card-title">
             Maestro de proveedores
@@ -1556,21 +1747,28 @@ function PageProveedores({ notify }) {
           </div>
           {loading ? <div className="loading"><span className="spin">◌</span></div> :
             <table>
-              <thead>
-                <tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Tel.</th><th></th></tr>
-              </thead>
+              <thead><tr><th>Nombre</th><th>Rubro</th><th>Palabras clave</th><th>Contacto</th><th>Email</th><th>Tel.</th><th></th></tr></thead>
               <tbody>
                 {provs.map(p => (
                   <tr key={p.id} className="click" onClick={() => handleSelectProveedor(p)}>
                     <td style={{ fontWeight: 600 }}>{p.nombre}</td>
                     <td className="text-muted">{p.rubro || "—"}</td>
+                    <td>
+                      {p.palabras_clave ? (
+                        <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                          {p.palabras_clave.split(",").map(k => k.trim()).filter(Boolean).slice(0, 4).map((k, i) => (
+                            <span key={i} className="tag">{k}</span>
+                          ))}
+                        </div>
+                      ) : <span style={{ color: "var(--muted2)", fontSize: 11 }}>—</span>}
+                    </td>
                     <td>{p.contacto || "—"}</td>
                     <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
                     <td className="text-mono" style={{ fontSize: 11 }}>{p.telefono || "—"}</td>
-                    <td><span style={{ fontSize: 11, color: "var(--tm-blue)" }}>Ver historial →</span></td>
+                    <td><span style={{ fontSize: 11, color: "var(--tm-blue)" }}>Ver →</span></td>
                   </tr>
                 ))}
-                {!provs.length && <tr><td colSpan={6}><div className="empty-state">Sin proveedores</div></td></tr>}
+                {!provs.length && <tr><td colSpan={7}><div className="empty-state">Sin proveedores</div></td></tr>}
               </tbody>
             </table>
           }
@@ -1579,21 +1777,65 @@ function PageProveedores({ notify }) {
 
       {/* Modal nuevo proveedor */}
       {modal && <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
-        <div className="modal" style={{ maxWidth: 500 }}>
+        <div className="modal modal-lg">
           <div className="mhdr"><div className="mtitle">Nuevo Proveedor</div><button className="mclose" onClick={() => setModal(false)}>✕</button></div>
           <div className="mbody">
+            <div className="form-section">Datos generales</div>
             <div className="form-grid">
               <FG label="Nombre *"><input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} /></FG>
-              <FG label="Rubro"><input value={form.rubro} onChange={e => setForm(f => ({ ...f, rubro: e.target.value }))} /></FG>
+              <FG label="Rubro"><input value={form.rubro} onChange={e => setForm(f => ({ ...f, rubro: e.target.value }))} placeholder="Ej: Repuestos navales, Catering..." /></FG>
               <FG label="Contacto"><input value={form.contacto} onChange={e => setForm(f => ({ ...f, contacto: e.target.value }))} /></FG>
               <FG label="Email"><input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></FG>
               <FG label="Teléfono"><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} /></FG>
             </div>
+            <FG label="Palabras clave" hint="Separadas por coma. Ej: bujías, filtros, repuestos motor, lubricantes">
+              <input
+                value={form.palabras_clave}
+                onChange={e => setForm(f => ({ ...f, palabras_clave: e.target.value }))}
+                placeholder="bujías, filtros, aceite, repuestos..."
+              />
+            </FG>
+            {form.palabras_clave && (
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6, marginBottom: 12 }}>
+                {form.palabras_clave.split(",").map(k => k.trim()).filter(Boolean).map((k, i) => (
+                  <span key={i} className="tag" style={{ background: "#EEF2FF", borderColor: "#C7D2FE", color: "var(--tm-blue)" }}>{k}</span>
+                ))}
+              </div>
+            )}
             <FG label="Notas"><textarea value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} /></FG>
+
+            <div className="form-section">Catálogo de productos / servicios</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+              Agregá los productos o servicios que ofrece este proveedor con precio de referencia. Esto permite sugerir proveedores automáticamente.
+            </div>
+            <div className="table-wrap">
+              <table className="items-edit">
+                <thead><tr><th style={{ width: "40%" }}>Descripción</th><th>Unidad</th><th>Precio ref.</th><th>Moneda</th><th></th></tr></thead>
+                <tbody>
+                  {itemsCatalogo.map((it, i) => (
+                    <tr key={it.id}>
+                      <td><input value={it.descripcion} onChange={e => setCI(i, "descripcion", e.target.value)} placeholder="Ej: Bujía NGK BPR6ES" /></td>
+                      <td><input value={it.unidad} onChange={e => setCI(i, "unidad", e.target.value)} style={{ width: 60 }} /></td>
+                      <td><input type="number" value={it.precio_ref} onChange={e => setCI(i, "precio_ref", e.target.value)} style={{ width: 90 }} /></td>
+                      <td>
+                        <select value={it.moneda} onChange={e => setCI(i, "moneda", e.target.value)} style={{ width: 65 }}>
+                          <option>ARS</option><option>USD</option>
+                        </select>
+                      </td>
+                      <td><button className="btn btn-ghost btn-sm" onClick={() => setItemsCatalogo(itemsCatalogo.filter((_, j) => j !== i))}>✕</button></td>
+                    </tr>
+                  ))}
+                  {itemsCatalogo.length === 0 && (
+                    <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px", color: "var(--muted2)", fontSize: 11 }}>Sin ítems — usá el botón para agregar</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <button className="btn btn-ghost btn-sm mt8" onClick={() => setItemsCatalogo([...itemsCatalogo, blankItem()])}>+ Agregar ítem al catálogo</button>
           </div>
           <div className="mftr">
-            <button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleSave}>Guardar</button>
+            <button className="btn btn-ghost" onClick={() => { setModal(false); setItemsCatalogo([]); }}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSave}>Guardar proveedor</button>
           </div>
         </div>
       </div>}
@@ -1638,6 +1880,7 @@ export default function App() {
     "inbox-parana": "INBOX — PARANA LOGÍSTICA",
     "inbox-cleansea": "INBOX — CLEAN SEA",
     "inbox-terramare": "INBOX — TERRA MARE",
+    "tracker": "TRACKER — TODAS LAS COMPRAS",
     "tracker-cotizacion": "TRACKER — EN COTIZACIÓN",
     "tracker-oc": "TRACKER — OC EMITIDA",
     "tracker-transito": "TRACKER — EN TRÁNSITO",
@@ -1677,6 +1920,7 @@ export default function App() {
           <NI id="inbox-terramare" icon="📥" label="Terra Mare" badge={counts.terramare} sub />
 
           <div className="nav-section">Tracker Compras</div>
+          <NI id="tracker" icon="📊" label="Tracker" badge={counts.cotizacion + counts.oc + counts.transito} badgeColor="amber" sub={false} />
           <NI id="tracker-cotizacion" icon="🔍" label="En cotización" badge={counts.cotizacion} badgeColor="amber" sub />
           <NI id="tracker-oc" icon="📄" label="OC Emitida" badge={counts.oc} badgeColor="amber" sub />
           <NI id="tracker-transito" icon="🚚" label="En tránsito" badge={counts.transito} badgeColor="amber" sub />
@@ -1712,6 +1956,7 @@ export default function App() {
             {page === "inbox-parana" && <PageInbox empresa="Parana Logistica" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "inbox-cleansea" && <PageInbox empresa="Clean Sea" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "inbox-terramare" && <PageInbox empresa="Terra Mare" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
+            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "tracker-cotizacion" && <PageTracker key={`tc-${refreshKey}`} statusFilter="cotizacion" notify={notify} />}
             {page === "tracker-oc" && <PageTracker key={`to-${refreshKey}`} statusFilter="oc_emitida" notify={notify} />}
             {page === "tracker-transito" && <PageTracker key={`tt-${refreshKey}`} statusFilter="en_transito" notify={notify} />}
