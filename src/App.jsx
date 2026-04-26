@@ -70,7 +70,7 @@ const api = {
     if (items?.length) await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: reqId, nro_linea: i + 1 })));
   },
   async getTrackerLineas(filtros = {}) {
-    let q = supabase.from("tracker_lineas").select("*, requisiciones(nro_solicitud, titulo, empresa, base_buque, urgencia, solicitado_por)").order("created_at", { ascending: false });
+    let q = supabase.from("tracker_lineas").select("*, requisiciones(nro_solicitud, titulo, empresa, base_buque, area, subarea, urgencia, solicitado_por, fecha_necesaria, costo_estimado, moneda_estimada, tipo_requisicion, observaciones)").order("created_at", { ascending: false });
     if (filtros.status) q = q.eq("status", filtros.status);
     if (filtros.statuses) q = q.in("status", filtros.statuses);
     if (filtros.proveedor) q = q.eq("proveedor_elegido", filtros.proveedor);
@@ -942,7 +942,7 @@ function PageInbox({ empresa, notify, onNeedRefresh }) {
 }
 
 // ─── PAGE: TRACKER — E4: vista tabla con filtros ──────────────────────────────
-function PageTracker({ statusFilter, notify }) {
+function PageTracker({ statusFilter, notify, onNeedRefresh }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -976,10 +976,9 @@ function PageTracker({ statusFilter, notify }) {
   const handleSave = (updated) => {
     setSelected(null);
     notify("Línea actualizada", "success");
-    // E10 FIX: siempre recargamos desde Supabase para que las líneas
-    // que cambiaron de status desaparezcan correctamente de esta vista
-    // y los contadores del sidebar se actualicen
+    // E10/E13 FIX: recargar vista y contadores sidebar
     load();
+    onNeedRefresh?.();
   };
 
   const handleSort = (col) => {
@@ -1150,11 +1149,12 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // E13 FIX: después de guardar recargamos Y actualizamos contadores del sidebar
   const handleSave = (updated) => {
     setSelected(null);
     notify("Línea actualizada", "success");
     load();
-    onNeedRefresh();
+    onNeedRefresh(); // esto dispara loadCounts() en el root
   };
 
   const handleSort = (col) => {
@@ -1174,6 +1174,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           l.descripcion?.toLowerCase().includes(q) ||
           req?.nro_solicitud?.toString().includes(q) ||
           req?.base_buque?.toLowerCase().includes(q) ||
+          req?.solicitado_por?.toLowerCase().includes(q) ||
           l.proveedor_elegido?.toLowerCase().includes(q) ||
           l.nro_oc?.toLowerCase().includes(q)
         )) return false;
@@ -1184,15 +1185,17 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
       let va, vb;
       const ra = a.requisiciones, rb = b.requisiciones;
       switch (sortCol) {
-        case "nro":        va = ra?.nro_solicitud || 0;   vb = rb?.nro_solicitud || 0; break;
-        case "descripcion":va = a.descripcion || "";       vb = b.descripcion || ""; break;
-        case "empresa":    va = ra?.empresa || "";         vb = rb?.empresa || ""; break;
-        case "buque":      va = ra?.base_buque || "";      vb = rb?.base_buque || ""; break;
-        case "status":     va = a.status || "";            vb = b.status || ""; break;
-        case "proveedor":  va = a.proveedor_elegido || ""; vb = b.proveedor_elegido || ""; break;
-        case "costo":      va = a.costo_real || 0;         vb = b.costo_real || 0; break;
+        case "nro":        va = ra?.nro_solicitud || 0;    vb = rb?.nro_solicitud || 0; break;
+        case "descripcion":va = a.descripcion || "";        vb = b.descripcion || ""; break;
+        case "empresa":    va = ra?.empresa || "";          vb = rb?.empresa || ""; break;
+        case "buque":      va = ra?.base_buque || "";       vb = rb?.base_buque || ""; break;
+        case "solicitante":va = ra?.solicitado_por || "";   vb = rb?.solicitado_por || ""; break;
+        case "status":     va = a.status || "";             vb = b.status || ""; break;
+        case "proveedor":  va = a.proveedor_elegido || "";  vb = b.proveedor_elegido || ""; break;
+        case "costo":      va = a.costo_real || 0;          vb = b.costo_real || 0; break;
         case "entrega":    va = a.fecha_entrega_prom || ""; vb = b.fecha_entrega_prom || ""; break;
-        default:           va = a.created_at || "";        vb = b.created_at || "";
+        case "entrega_real":va = a.fecha_entrega_real || "";vb = b.fecha_entrega_real || ""; break;
+        default:           va = a.created_at || "";         vb = b.created_at || "";
       }
       const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
       return sortDir === "asc" ? cmp : -cmp;
@@ -1202,15 +1205,49 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
   const empresasDisponibles = [...new Set(lineas.map(l => l.requisiciones?.empresa).filter(Boolean))];
   const proveedoresDisponibles = [...new Set(lineas.map(l => l.proveedor_elegido).filter(Boolean))];
 
-  // Totales rápidos
   const totalARS = lineas.filter(l => l.costo_real && (l.moneda_real === "ARS" || !l.moneda_real)).reduce((a, l) => a + l.costo_real, 0);
   const totalUSD = lineas.filter(l => l.costo_real && l.moneda_real === "USD").reduce((a, l) => a + l.costo_real, 0);
   const enCurso = lineas.filter(l => ["en_cotizacion","oc_emitida","en_transito"].includes(l.status)).length;
   const entregadas = lineas.filter(l => l.status === "entregado").length;
 
+  // Exportar a Excel — todas las columnas
+  const handleExport = () => {
+    const rows = lineasFiltradas.map(l => {
+      const req = l.requisiciones;
+      const items = (l.items_detalle || []).map(i => `${i.descripcion} x${i.cantidad}`).join(" | ");
+      return {
+        "REQ": req ? `REQ-${String(req.nro_solicitud).padStart(4,"0")}` : "",
+        "Grupo": l.grupo || "",
+        "Descripción consolidada": l.descripcion || "",
+        "Empresa": req?.empresa || "",
+        "Base/Buque": req?.base_buque || "",
+        "Área": req?.area || "",
+        "Solicitante": req?.solicitado_por || "",
+        "Fecha necesaria": req?.fecha_necesaria ? fmtDate(req.fecha_necesaria) : "",
+        "Urgencia": req?.urgencia || "",
+        "Estado": TRACKER_STATUS[l.status]?.label || l.status || "",
+        "Proveedor": l.proveedor_elegido || "",
+        "N° OC": l.nro_oc || "",
+        "Justificación proveedor": l.motivo_proveedor || "",
+        "Costo real": l.costo_real || "",
+        "Moneda": l.moneda_real || "",
+        "Plazo de pago": l.plazo_pago || "",
+        "Entrega prometida": l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : "",
+        "Entrega real": l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "",
+        "Ítems originales": items,
+        "Notas": l.notas || "",
+        "Fecha creación": l.created_at ? fmtDate(l.created_at) : "",
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Tracker");
+    XLSX.writeFile(wb, `tracker_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
   return (
     <div>
-      {/* Stats rápidos */}
+      {/* Stats */}
       <div className="stats" style={{ gridTemplateColumns: "repeat(4,1fr)", marginBottom: 16 }}>
         <div className="stat"><div className="stat-label">Total líneas</div><div className="stat-value va">{lineas.length}</div></div>
         <div className="stat"><div className="stat-label">En curso</div><div className="stat-value vm">{enCurso}</div></div>
@@ -1225,7 +1262,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
         </div>
       </div>
 
-      {/* Filtros */}
+      {/* Filtros + exportar */}
       <div className="filter-row">
         <input className="filter-input" placeholder="🔍  Buscar..." value={filtros.busqueda} onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))} />
         <select className="filter-select" value={filtros.status} onChange={e => setFiltros(f => ({ ...f, status: e.target.value }))}>
@@ -1244,6 +1281,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           <button className="btn btn-ghost btn-sm" onClick={() => setFiltros({ empresa: "", status: "", proveedor: "", busqueda: "" })}>✕ Limpiar</button>
         )}
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{lineasFiltradas.length} de {lineas.length}</span>
+        <button className="btn btn-ghost btn-sm" onClick={handleExport} style={{ marginLeft: 8 }}>↓ Excel</button>
       </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
@@ -1257,20 +1295,25 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                   <th className="sortable" onClick={() => handleSort("descripcion")}>Descripción<SortIcon col="descripcion" /></th>
                   <th className="sortable" onClick={() => handleSort("empresa")}>Empresa<SortIcon col="empresa" /></th>
                   <th className="sortable" onClick={() => handleSort("buque")}>Base/Buque<SortIcon col="buque" /></th>
+                  <th className="sortable" onClick={() => handleSort("solicitante")}>Solicitante<SortIcon col="solicitante" /></th>
+                  <th>Área</th>
                   <th>Urgencia</th>
+                  <th>Fecha nec.</th>
                   <th className="sortable" onClick={() => handleSort("status")}>Estado<SortIcon col="status" /></th>
                   <th className="sortable" onClick={() => handleSort("proveedor")}>Proveedor<SortIcon col="proveedor" /></th>
                   <th>OC</th>
                   <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th>Moneda</th>
                   <th>Plazo pago</th>
                   <th className="sortable" onClick={() => handleSort("entrega")}>Entrega prom.<SortIcon col="entrega" /></th>
-                  <th>Entrega real</th>
+                  <th className="sortable" onClick={() => handleSort("entrega_real")}>Entrega real<SortIcon col="entrega_real" /></th>
                   <th>Ítems</th>
+                  <th>Notas</th>
                 </tr>
               </thead>
               <tbody>
                 {lineasFiltradas.length === 0 ? (
-                  <tr><td colSpan={13} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
+                  <tr><td colSpan={18} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
                 ) : lineasFiltradas.map(l => {
                   const req = l.requisiciones;
                   const items = l.items_detalle || [];
@@ -1280,24 +1323,35 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                       <td>
                         <div className="flex-gap">
                           <div className="grupo-chip">{l.grupo}</div>
-                          {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
+                          {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4,"0")}</span>}
                         </div>
                       </td>
-                      <td><div style={{ fontWeight: 600, fontSize: 12, color: "var(--tm-navy)", maxWidth: 200 }}>{l.descripcion}</div></td>
+                      <td><div style={{ fontWeight: 600, fontSize: 12, color: "var(--tm-navy)", maxWidth: 180 }}>{l.descripcion}</div></td>
                       <td><span className="tag">{req?.empresa || "—"}</span></td>
                       <td style={{ color: "var(--muted)", fontSize: 12 }}>{req?.base_buque || "—"}</td>
+                      <td style={{ fontSize: 12, color: "var(--muted)" }}>{req?.solicitado_por || "—"}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted)" }}>{req?.area || "—"}{req?.subarea ? ` › ${req.subarea}` : ""}</td>
                       <td>{req ? <UrgBadge urgencia={req.urgencia} /> : "—"}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{req?.fecha_necesaria ? fmtDate(req.fecha_necesaria) : "—"}</td>
                       <td><TrackerBadge status={l.status} /></td>
                       <td style={{ fontSize: 12 }}>{l.proveedor_elegido || <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                       <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
-                      <td className="text-mono" style={{ fontSize: 12 }}>{l.costo_real ? fmt(l.costo_real, l.moneda_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td className="text-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{l.costo_real != null ? new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(l.costo_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td style={{ fontSize: 11, color: "var(--muted)" }}>{l.moneda_real || "—"}</td>
                       <td style={{ fontSize: 11, color: "var(--muted)" }}>{l.plazo_pago || "—"}</td>
-                      <td style={{ fontSize: 12, color: "var(--warn)" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
-                      <td style={{ fontSize: 12, color: entregadaTarde ? "var(--danger)" : l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>
+                      <td style={{ fontSize: 12, color: "var(--warn)", whiteSpace: "nowrap" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                      <td style={{ fontSize: 12, whiteSpace: "nowrap", color: entregadaTarde ? "var(--danger)" : l.fecha_entrega_real ? "var(--accent2)" : "var(--muted2)" }}>
                         {l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "—"}
-                        {entregadaTarde && <span style={{ fontSize: 9, marginLeft: 4 }}>⚠</span>}
+                        {entregadaTarde && <span title="Entrega tardía" style={{ marginLeft: 4 }}>⚠</span>}
                       </td>
-                      <td><span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{items.length}</span></td>
+                      <td>
+                        {items.length > 0
+                          ? <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", cursor: "help" }} title={items.map(i => `${i.descripcion} ×${i.cantidad}`).join("\n")}>{items.length} ítem{items.length !== 1 ? "s" : ""}</span>
+                          : <span style={{ color: "var(--muted2)", fontSize: 11 }}>—</span>}
+                      </td>
+                      <td style={{ fontSize: 11, color: "var(--muted)", maxWidth: 140 }}>
+                        {l.notas ? <span title={l.notas}>{l.notas.length > 40 ? l.notas.slice(0,40) + "…" : l.notas}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}
+                      </td>
                     </tr>
                   );
                 })}
@@ -1915,15 +1969,15 @@ export default function App() {
           </div>
 
           <div className="nav-section">Inbox</div>
-          <NI id="inbox-parana" icon="📥" label="Parana Logística" badge={counts.parana} sub />
-          <NI id="inbox-cleansea" icon="📥" label="Clean Sea" badge={counts.cleansea} sub />
-          <NI id="inbox-terramare" icon="📥" label="Terra Mare" badge={counts.terramare} sub />
+          <NI id="inbox-parana" icon="📥" label="Parana Logística" sub />
+          <NI id="inbox-cleansea" icon="📥" label="Clean Sea" sub />
+          <NI id="inbox-terramare" icon="📥" label="Terra Mare" sub />
 
           <div className="nav-section">Tracker Compras</div>
-          <NI id="tracker" icon="📊" label="Tracker" badge={counts.cotizacion + counts.oc + counts.transito} badgeColor="amber" sub={false} />
-          <NI id="tracker-cotizacion" icon="🔍" label="En cotización" badge={counts.cotizacion} badgeColor="amber" sub />
-          <NI id="tracker-oc" icon="📄" label="OC Emitida" badge={counts.oc} badgeColor="amber" sub />
-          <NI id="tracker-transito" icon="🚚" label="En tránsito" badge={counts.transito} badgeColor="amber" sub />
+          <NI id="tracker" icon="📊" label="Tracker" sub={false} />
+          <NI id="tracker-cotizacion" icon="🔍" label="En cotización" sub />
+          <NI id="tracker-oc" icon="📄" label="OC Emitida" sub />
+          <NI id="tracker-transito" icon="🚚" label="En tránsito" sub />
 
           <div className="nav-section">Archivo</div>
           <NI id="archivo-entregados" icon="✓" label="Entregados" sub />
@@ -1957,9 +2011,9 @@ export default function App() {
             {page === "inbox-cleansea" && <PageInbox empresa="Clean Sea" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "inbox-terramare" && <PageInbox empresa="Terra Mare" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
-            {page === "tracker-cotizacion" && <PageTracker key={`tc-${refreshKey}`} statusFilter="cotizacion" notify={notify} />}
-            {page === "tracker-oc" && <PageTracker key={`to-${refreshKey}`} statusFilter="oc_emitida" notify={notify} />}
-            {page === "tracker-transito" && <PageTracker key={`tt-${refreshKey}`} statusFilter="en_transito" notify={notify} />}
+            {page === "tracker-cotizacion" && <PageTracker key={`tc-${refreshKey}`} statusFilter="cotizacion" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
+            {page === "tracker-oc" && <PageTracker key={`to-${refreshKey}`} statusFilter="oc_emitida" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
+            {page === "tracker-transito" && <PageTracker key={`tt-${refreshKey}`} statusFilter="en_transito" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
             {page === "archivo-entregados" && <PageArchivo tipo="entregados" />}
             {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-parana"); loadCounts(); }} onCancel={() => setPage("inbox-parana")} notify={notify} />}
