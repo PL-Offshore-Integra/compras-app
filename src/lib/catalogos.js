@@ -34,8 +34,7 @@ export const TIPOS_REQUISICION = [
   "Material Urgencia",
   "Servicios Mantenimiento",
   "Servicios Urgencia",
-  "Viveres",
-  "Otros",
+    "Otros",
 ];
 
 export const URGENCIA_OPTIONS = ["Critica", "Alta", "Normal"];

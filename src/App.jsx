@@ -2038,6 +2038,8 @@ const apiViveres = {
     let q = supabase.from("viveres_pedidos").select("*, viveres_pedido_items(*)").order("created_at", { ascending: false });
     if (filtros.empresa) q = q.eq("empresa", filtros.empresa);
     if (filtros.base_buque) q = q.eq("base_buque", filtros.base_buque);
+    if (filtros.status) q = q.eq("status", filtros.status);
+    if (filtros.statuses) q = q.in("status", filtros.statuses);
     const { data, error } = await q;
     if (error) throw error;
     return data || [];
@@ -2082,7 +2084,265 @@ const TEMP_COLOR = {
   "Congelados": { bg: "#EDE9FE", color: "#4C1D95", border: "#DDD6FE", dot: "#8B5CF6" },
 };
 
-// ─── PAGE: VÍVERES — NUEVO PEDIDO ────────────────────────────────────────────
+// ─── MODAL: REVISAR PEDIDO DE VÍVERES ────────────────────────────────────────
+function ViveresRevisarModal({ pedido, onClose, onAprobado, onRechazado }) {
+  const items = pedido.viveres_pedido_items || [];
+  const [editItems, setEditItems] = useState(items.map(it => ({ ...it })));
+  const [modo, setModo] = useState("detalle"); // detalle | condicional | rechazar
+  const [motivoRechazo, setMotivoRechazo] = useState("");
+  const [notaCondicional, setNotaCondicional] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const setEI = (id, k, v) => setEditItems(prev => prev.map(it => it.id === id ? { ...it, [k]: parseFloat(v) || 0 } : it));
+
+  const handleAprobar = async () => {
+    setSaving(true);
+    try {
+      // Actualizar items si hubo edición condicional
+      if (modo === "condicional") {
+        await apiViveres.actualizarItems(pedido.id, editItems);
+      }
+      // Crear requisición
+      const reqItems = editItems.filter(it => it.cantidad_pedida > 0).map(it => ({
+        descripcion: it.descripcion,
+        cantidad: it.cantidad_pedida,
+        unidad: it.unidad,
+        stock_disponible: it.stock_actual,
+        proveedor_sugerido: "",
+      }));
+      const req = await api.crearRequisicion({
+        titulo: `Víveres ${pedido.base_buque} — ${pedido.pax} PAX × ${pedido.dias} días`,
+        empresa: pedido.empresa,
+        base_buque: pedido.base_buque,
+        area: "Catering",
+        tipo_requisicion: "Víveres",
+        urgencia: "Normal",
+        solicitado_por: pedido.solicitado_por,
+        fecha_necesaria: pedido.fecha_necesaria || null,
+        observaciones: pedido.observaciones || (modo === "condicional" && notaCondicional ? `Aprobado con modificaciones: ${notaCondicional}` : null),
+      }, reqItems);
+      await apiViveres.actualizarPedido(pedido.id, {
+        status: "aprobado",
+        requisicion_id: req.id,
+      });
+      onAprobado();
+    } finally { setSaving(false); }
+  };
+
+  const handleRechazar = async () => {
+    if (!motivoRechazo.trim()) return alert("Ingresá un motivo de rechazo");
+    setSaving(true);
+    try {
+      await apiViveres.actualizarPedido(pedido.id, {
+        status: "rechazado",
+        observaciones: motivoRechazo,
+      });
+      onRechazado();
+    } finally { setSaving(false); }
+  };
+
+  const itemsConPedido = editItems.filter(it => it.cantidad_pedida > 0);
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="mhdr">
+          <div>
+            <div className="mtitle">🚢 {pedido.base_buque} — Pedido de Víveres</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+              {pedido.empresa} · {pedido.pax} PAX · {pedido.dias} días · Por: {pedido.solicitado_por}
+              {pedido.fecha_necesaria && <span style={{ color: "var(--warn)", marginLeft: 8 }}>Necesario: {fmtDate(pedido.fecha_necesaria)}</span>}
+            </div>
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+
+          {/* Tabs */}
+          <div className="tabs-row">
+            {[
+              { id: "detalle", label: "Detalle" },
+              { id: "condicional", label: "Aprobar con cambios" },
+              { id: "rechazar", label: "Rechazar" },
+            ].map(t => (
+              <div key={t.id} className={`tab ${modo === t.id ? "active" : ""}`} onClick={() => setModo(t.id)}
+                style={{ color: t.id === "rechazar" && modo === t.id ? "var(--danger)" : undefined, borderBottomColor: t.id === "rechazar" && modo === t.id ? "var(--danger)" : undefined }}>
+                {t.label}
+              </div>
+            ))}
+          </div>
+
+          {/* DETALLE */}
+          {modo === "detalle" && (
+            <div>
+              {pedido.observaciones && <div className="info-box mb12" style={{ fontSize: 12 }}>{pedido.observaciones}</div>}
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Categoría</th><th>Temp.</th><th>Descripción</th><th>Unidad</th><th>Stock</th><th>Pedido</th></tr></thead>
+                  <tbody>
+                    {itemsConPedido.length === 0
+                      ? <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted2)" }}>Sin ítems pedidos</td></tr>
+                      : itemsConPedido.map((it, i) => {
+                          const tc = TEMP_COLOR[it.temperatura] || { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB" };
+                          return (
+                            <tr key={i}>
+                              <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.categoria}</td>
+                              <td>
+                                <span style={{ fontSize: 10, fontWeight: 600, color: tc.color, background: tc.bg, border: `1px solid ${tc.border}`, borderRadius: 4, padding: "2px 6px" }}>{it.temperatura}</span>
+                              </td>
+                              <td style={{ fontWeight: 500 }}>{it.descripcion}</td>
+                              <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.unidad}</td>
+                              <td className="text-mono">{it.stock_actual || 0}</td>
+                              <td className="text-mono" style={{ fontWeight: 700, color: "var(--accent2)" }}>{it.cantidad_pedida}</td>
+                            </tr>
+                          );
+                        })
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* APROBAR CON CAMBIOS */}
+          {modo === "condicional" && (
+            <div>
+              <div className="info-box warn mb12" style={{ fontSize: 11 }}>
+                Podés editar las cantidades pedidas antes de aprobar. Los cambios quedan registrados.
+              </div>
+              <div className="table-wrap">
+                <table className="items-edit">
+                  <thead><tr><th>Categoría</th><th>Descripción</th><th>Unidad</th><th>Stock</th><th>Cantidad aprobada</th></tr></thead>
+                  <tbody>
+                    {editItems.filter(it => it.cantidad_pedida > 0).map(it => (
+                      <tr key={it.id}>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.categoria}</td>
+                        <td style={{ fontWeight: 500 }}>{it.descripcion}</td>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>{it.unidad}</td>
+                        <td className="text-mono">{it.stock_actual || 0}</td>
+                        <td>
+                          <input type="number" min={0} value={it.cantidad_pedida}
+                            onChange={e => setEI(it.id, "cantidad_pedida", e.target.value)}
+                            style={{ width: 80, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontFamily: "var(--mono)", fontSize: 12, padding: "4px 8px", outline: "none", textAlign: "right" }} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt12">
+                <FG label="Nota para el solicitante (opcional)">
+                  <textarea value={notaCondicional} onChange={e => setNotaCondicional(e.target.value)} placeholder="Ej: Se ajustó la cantidad de aceite por stock disponible..." />
+                </FG>
+              </div>
+            </div>
+          )}
+
+          {/* RECHAZAR */}
+          {modo === "rechazar" && (
+            <div>
+              <div className="info-box" style={{ fontSize: 12, marginBottom: 14, borderLeft: "3px solid var(--danger)", background: "#FEF2F2" }}>
+                El pedido volverá al solicitante con el motivo de rechazo.
+              </div>
+              <FG label="Motivo de rechazo *">
+                <textarea value={motivoRechazo} onChange={e => setMotivoRechazo(e.target.value)} placeholder="Explicá por qué se rechaza el pedido..." style={{ minHeight: 100 }} />
+              </FG>
+            </div>
+          )}
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
+          {modo === "rechazar" && (
+            <button className="btn btn-danger" onClick={handleRechazar} disabled={saving || !motivoRechazo.trim()}>
+              {saving ? "..." : "✕ Confirmar rechazo"}
+            </button>
+          )}
+          {(modo === "detalle" || modo === "condicional") && (
+            <button className="btn btn-primary" onClick={handleAprobar} disabled={saving || itemsConPedido.length === 0}>
+              {saving ? "Aprobando..." : modo === "condicional" ? "✓ Aprobar con cambios → Compras" : "✓ Aprobar → Compras"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGE: VÍVERES — INBOX ────────────────────────────────────────────────────
+function PageViveresInbox({ notify, onNeedRefresh }) {
+  const [pedidos, setPedidos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await apiViveres.getPedidos({ status: "enviado" });
+      setPedidos(data);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAprobado = () => {
+    setSelected(null);
+    notify("Pedido aprobado — requisición creada en Inbox de Compras", "success");
+    load();
+    onNeedRefresh();
+  };
+
+  const handleRechazado = () => {
+    setSelected(null);
+    notify("Pedido rechazado", "warn");
+    load();
+  };
+
+  return (
+    <div>
+      <div className="inbox-header">
+        <div className="inbox-company">🛒 Pedidos de Víveres pendientes</div>
+        <span className="ni-badge" style={{ position: "static" }}>{pedidos.length}</span>
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span> Cargando...</div> :
+        pedidos.length === 0
+          ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>Sin pedidos de víveres pendientes</div>
+          : pedidos.map(p => {
+              const itemsConPedido = (p.viveres_pedido_items || []).filter(it => it.cantidad_pedida > 0);
+              return (
+                <div key={p.id} className="req-row unread" onClick={() => setSelected(p)}>
+                  <div className="flex-between mb8">
+                    <div className="flex-gap">
+                      <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>{fmtDate(p.fecha_pedido)}</span>
+                      <span className="badge b-blue">Víveres</span>
+                    </div>
+                    <span style={{ fontSize: 10, color: "var(--muted)" }}>{p.empresa}</span>
+                  </div>
+                  <div className="req-title">🚢 {p.base_buque} — {p.pax} PAX × {p.dias} días</div>
+                  <div className="req-meta">
+                    <span>{p.solicitado_por}</span>
+                    <span>·</span>
+                    <span>{itemsConPedido.length} ítems pedidos</span>
+                    {p.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Necesario: {fmtDate(p.fecha_necesaria)}</span></>}
+                  </div>
+                </div>
+              );
+            })
+      }
+
+      {selected && (
+        <ViveresRevisarModal
+          pedido={selected}
+          onClose={() => setSelected(null)}
+          onAprobado={handleAprobado}
+          onRechazado={handleRechazado}
+        />
+      )}
+    </div>
+  );
+}
+
+
 function PageViveresNuevo({ notify, onSaved, onCancel }) {
   const [step, setStep] = useState(1); // 1: cabecera, 2: ítems
   const [catalogo, setCatalogo] = useState([]);
@@ -2797,6 +3057,7 @@ export default function App() {
     "tracker-transito": "TRACKER — EN TRÁNSITO",
     "archivo-entregados": "ARCHIVO — ENTREGADOS",
     "archivo-rechazados": "ARCHIVO — RECHAZADOS",
+    "viveres-inbox": "VÍVERES — INBOX",
     "viveres-nuevo": "VÍVERES — NUEVO PEDIDO",
     "viveres-historial": "VÍVERES — HISTORIAL",
     "viveres-catalogo": "VÍVERES — CATÁLOGO",
@@ -2843,10 +3104,7 @@ export default function App() {
           <NI id="archivo-entregados" icon="✓" label="Entregados" sub />
           <NI id="archivo-rechazados" icon="✗" label="Rechazados" sub />
 
-          <div className="nav-section">Víveres</div>
-          <NI id="viveres-nuevo" icon="🛒" label="Nuevo Pedido" sub />
-          <NI id="viveres-historial" icon="📋" label="Historial" sub />
-          <NI id="viveres-catalogo" icon="📦" label="Catálogo" sub />
+
 
           <div className="nav-section">Gestión</div>
           <NI id="nueva" icon="✚" label="Nueva Requisición" />
@@ -2882,9 +3140,7 @@ export default function App() {
             {page === "archivo-entregados" && <PageArchivo tipo="entregados" />}
             {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-parana"); loadCounts(); }} onCancel={() => setPage("inbox-parana")} notify={notify} />}
-            {page === "viveres-nuevo" && <PageViveresNuevo notify={notify} onSaved={() => setPage("viveres-historial")} onCancel={() => setPage("viveres-historial")} />}
-            {page === "viveres-historial" && <PageViveresHistorial notify={notify} onNuevo={() => setPage("viveres-nuevo")} />}
-            {page === "viveres-catalogo" && <PageViveresCatalogo notify={notify} />}
+           
             {page === "kpis" && <PageKPIs />}
             {page === "proveedores" && <PageProveedores notify={notify} />}
           </div>
