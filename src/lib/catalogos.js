@@ -1,23 +1,17 @@
-// ── CATÁLOGOS (extraídos del Excel MVP) ─────────────────────────────────────
+// ── CATÁLOGOS — Compras Técnicas Parana Logística ───────────────────────────
 
-export const EMPRESAS = ["Clean Sea", "Parana Logistica", "Terra Mare"];
+export const EMPRESAS = ["Parana Logistica"];
 
 export const BASES_POR_EMPRESA = {
-  "Clean Sea":        ["Bahia Blanca", "San Lorenzo", "San Fernando", "Quequen", "Punta Loyola", "Parana Ports", "Galpon"],
   "Parana Logistica": ["Golondrina de Mar", "Atlantic Dama", "Parana Ports"],
-  "Terra Mare":       ["San Fernando"],
 };
 
 export const AREAS_POR_EMPRESA = {
-  "Clean Sea":        ["Operaciones", "Tecnica", "Administracion", "Comercial", "RRHH", "HSE", "Viveres", "Otros"],
-  "Parana Logistica": ["Operaciones", "Tecnica", "Administracion", "Comercial", "RRHH", "Viveres", "Otros"],
-  "Terra Mare":       ["Operaciones", "Tecnica", "Administracion", "Comercial", "RRHH", "HSE", "Viveres", "Otros"],
+  "Parana Logistica": ["Operaciones", "Tecnica", "Administracion", "Comercial", "RRHH", "Otros"],
 };
 
 export const SUBAREA_TECNICA = {
-  "Clean Sea":        ["Machi", "Clean Sea I", "Clean Sea II", "Clean Sea III", "Clean Sea n", "Fi / Fi"],
   "Parana Logistica": ["Sala de Maquinas", "Cubierta", "Habitabilidad", "Seguridad e Higiene", "Propulsion y gobierno", "Sistemas electricos"],
-  "Terra Mare":       ["Sala de Maquinas", "Cubierta", "Habitabilidad", "Seguridad e Higiene", "Propulsion y gobierno", "Sistemas electricos"],
 };
 
 export const DETALLE_TECNICO = {
@@ -34,7 +28,7 @@ export const TIPOS_REQUISICION = [
   "Material Urgencia",
   "Servicios Mantenimiento",
   "Servicios Urgencia",
-    "Otros",
+  "Otros",
 ];
 
 export const URGENCIA_OPTIONS = ["Critica", "Alta", "Normal"];
@@ -49,26 +43,33 @@ export const CATEGORIAS_RECHAZO = [
   "Otro",
 ];
 
+// Nuevo flujo de aprobación
 export const STATUS_LABELS = {
-  pendiente_revision: "Pendiente revisión",
-  en_revision:        "En revisión",
-  aprobado_cotizar:   "Aprobado p/ cotizar",
-  rechazado:          "Rechazado",
-  en_compra:          "En compra",
-  entregado_parcial:  "Entrega parcial",
-  entregado:          "Entregado",
-  cerrado:            "Cerrado",
+  borrador:                  "Borrador",
+  pendiente_aprobacion:      "Pendiente aprobación",
+  aprobado_cotizar:          "Aprobado p/ cotizar",
+  en_cotizacion:             "En cotización",
+  pendiente_confirmacion:    "Pendiente confirmación valor",
+  aprobado:                  "Aprobado",
+  rechazado:                 "Rechazado",
+  en_compra:                 "En compra",
+  entregado_parcial:         "Entrega parcial",
+  entregado:                 "Entregado",
+  cerrado:                   "Cerrado",
 };
 
 export const STATUS_COLOR = {
-  pendiente_revision: "amber",
-  en_revision:        "blue",
-  aprobado_cotizar:   "teal",
-  rechazado:          "red",
-  en_compra:          "purple",
-  entregado_parcial:  "orange",
-  entregado:          "green",
-  cerrado:            "gray",
+  borrador:                  "gray",
+  pendiente_aprobacion:      "amber",
+  aprobado_cotizar:          "blue",
+  en_cotizacion:             "teal",
+  pendiente_confirmacion:    "purple",
+  aprobado:                  "green",
+  rechazado:                 "red",
+  en_compra:                 "blue",
+  entregado_parcial:         "orange",
+  entregado:                 "green",
+  cerrado:                   "gray",
 };
 
 export const URGENCIA_COLOR = {
