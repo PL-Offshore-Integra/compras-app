@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import {
-  EMPRESAS, BASES_POR_EMPRESA, AREAS_POR_EMPRESA, SUBAREA_TECNICA,
+  BASES_POR_EMPRESA, AREAS_POR_EMPRESA, SUBAREA_TECNICA,
   DETALLE_TECNICO, TIPOS_REQUISICION, URGENCIA_OPTIONS, PLAZO_PAGO_OPTIONS,
   STATUS_LABELS, CATEGORIAS_RECHAZO
 } from "./lib/catalogos";
@@ -9,6 +9,7 @@ import { supabase } from "./lib/supabase";
 
 const USUARIO = "Comprador";
 const PORTAL_URL = "https://erp-portal-fawn.vercel.app";
+const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
 
 const TRACKER_STATUS = {
   en_cotizacion: { label: "En cotización", color: "b-amber" },
@@ -18,11 +19,10 @@ const TRACKER_STATUS = {
   archivado:     { label: "Archivado",     color: "b-gray" },
 };
 
-const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
-
 const fmt = (n, cur = "ARS") =>
   n != null ? new Intl.NumberFormat("es-AR", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(n) : "—";
 const fmtDate = d => d ? new Date(d).toLocaleDateString("es-AR") : "—";
+const fmtDateTime = d => d ? new Date(d).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
 
 const api = {
   async getRequisiciones(filtros = {}) {
@@ -42,9 +42,7 @@ const api = {
   async crearRequisicion(req, items) {
     const { data: nueva, error } = await supabase.from("requisiciones").insert([{ ...req, status: "pendiente_aprobacion" }]).select().single();
     if (error) throw error;
-    if (items?.length) {
-      await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: nueva.id, nro_linea: i + 1 })));
-    }
+    if (items?.length) await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: nueva.id, nro_linea: i + 1 })));
     await supabase.from("requisicion_historial").insert([{ requisicion_id: nueva.id, evento: "Requisición creada", usuario: USUARIO, status_nuevo: "pendiente_aprobacion" }]);
     return nueva;
   },
@@ -59,10 +57,11 @@ const api = {
     if (items?.length) await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: reqId, nro_linea: i + 1 })));
   },
   async getTrackerLineas(filtros = {}) {
-    let q = supabase.from("tracker_lineas").select("*, requisiciones(nro_solicitud, titulo, empresa, base_buque, area, subarea, urgencia, solicitado_por, fecha_necesaria, tipo_requisicion, observaciones)").order("created_at", { ascending: false });
+    let q = supabase.from("tracker_lineas").select("*, requisiciones(id, nro_solicitud, titulo, empresa, base_buque, area, subarea, urgencia, solicitado_por, fecha_necesaria, tipo_requisicion, observaciones, created_at, updated_at)").order("created_at", { ascending: false });
     if (filtros.status) q = q.eq("status", filtros.status);
     if (filtros.statuses) q = q.in("status", filtros.statuses);
     if (filtros.proveedor) q = q.eq("proveedor_elegido", filtros.proveedor);
+    if (filtros.requisicion_id) q = q.eq("requisicion_id", filtros.requisicion_id);
     const { data, error } = await q;
     if (error) throw error;
     return data || [];
@@ -124,8 +123,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ni.back:hover{color:rgba(255,255,255,.8)}
 .ni-icon{font-size:13px;width:16px;text-align:center;flex-shrink:0}
 .ni-badge{margin-left:auto;background:var(--danger);color:#fff;font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center}
-.ni-badge.amber{background:var(--warn)}
-.ni-badge.gray{background:rgba(255,255,255,.2);color:rgba(255,255,255,.7)}
+.ni-badge.amber{background:var(--warn)}.ni-badge.gray{background:rgba(255,255,255,.2);color:rgba(255,255,255,.7)}
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:13px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(33,51,99,.06)}
 .topbar-title{font-size:12px;font-weight:600;letter-spacing:1px;color:var(--navy);text-transform:uppercase}
@@ -140,13 +138,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .table-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:9px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2)}
-td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr.click:hover td{background:var(--surface3);cursor:pointer}
-.tracker-table{width:100%;border-collapse:collapse;font-size:12px}
 .tracker-table th{font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2);position:sticky;top:0;z-index:2}
 .tracker-table th.sortable{cursor:pointer;user-select:none}.tracker-table th.sortable:hover{color:var(--navy)}
-.tracker-table td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tracker-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
 .tracker-table tr:hover td{background:var(--surface3);cursor:pointer}
 .tracker-table tr:last-child td{border-bottom:none}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
@@ -174,7 +171,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .overlay{position:fixed;inset:0;background:rgba(33,51,99,.5);display:flex;align-items:flex-start;justify-content:center;z-index:100;padding:20px;overflow-y:auto;animation:fadeIn .15s}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:860px;margin:auto;animation:slideUp .2s;box-shadow:0 8px 32px rgba(33,51,99,.18)}
-.modal-lg{max-width:960px}
+.modal-lg{max-width:1000px}
 .mhdr{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 22px;border-bottom:1px solid var(--border);background:var(--surface2);border-radius:12px 12px 0 0}
 .mtitle{font-size:13px;font-weight:700;letter-spacing:.5px;color:var(--navy)}
 .mbody{padding:22px}
@@ -208,7 +205,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .req-row:hover{border-color:var(--blue);box-shadow:0 2px 8px rgba(35,92,150,.12)}
 .req-row.unread{border-left:4px solid var(--blue)}
 .req-row.devuelto{border-left:4px solid var(--warn)}
-.req-row.pendiente-confirmacion{border-left:4px solid var(--orange)}
+.req-row.pend-confirm{border-left:4px solid var(--orange)}
 .req-title{font-weight:600;font-size:14px;margin-bottom:6px;color:var(--navy)}
 .req-meta{display:flex;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap;align-items:center}
 .notif{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-left-width:3px;border-radius:var(--r2);padding:12px 16px;font-size:13px;animation:slideUp .2s;z-index:300;max-width:340px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(33,51,99,.15)}
@@ -232,8 +229,9 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tab.active{color:var(--blue);border-bottom-color:var(--blue)}
 .grupo-chip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;font-family:var(--mono);font-size:12px;font-weight:700;background:#DBEAFE;color:var(--blue);border:1px solid #BFDBFE;flex-shrink:0}
 .tag{display:inline-block;font-family:var(--mono);font-size:9px;padding:2px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--muted)}
+.fecha-chip{display:inline-flex;flex-direction:column;gap:1px;font-family:var(--mono);font-size:9px;color:var(--muted);white-space:nowrap}
+.fecha-chip span:first-child{font-size:8px;color:var(--muted2);text-transform:uppercase;letter-spacing:.5px}
 .tracker-simple-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:8px}
-.tracker-simple-row.vencida{border-left:4px solid var(--danger)}
 .tracker-simple-row.en-curso{border-left:4px solid var(--warn)}
 .tracker-simple-row.entregado{border-left:4px solid var(--accent2)}
 `;
@@ -256,9 +254,10 @@ function TrackerBadge({ status }) {
 
 function StatusBadge({ status }) {
   const colorMap = {
-    borrador: "b-gray", pendiente_aprobacion: "b-amber", aprobado_cotizar: "b-blue",
-    en_cotizacion: "b-teal", pendiente_confirmacion: "b-orange", aprobado: "b-green",
-    rechazado: "b-red", en_compra: "b-purple", entregado: "b-green", cerrado: "b-gray",
+    pendiente_aprobacion: "b-amber", aprobado_cotizar: "b-blue",
+    en_cotizacion: "b-teal", pendiente_confirmacion: "b-orange",
+    aprobado: "b-green", rechazado: "b-red", en_compra: "b-purple",
+    entregado: "b-green", cerrado: "b-gray",
   };
   return <span className={`badge ${colorMap[status] || "b-gray"}`}>{STATUS_LABELS[status] || status}</span>;
 }
@@ -271,37 +270,122 @@ function FG({ label, hint, children, full }) {
   </div>;
 }
 
+function FechaChip({ label, fecha }) {
+  if (!fecha) return <div className="fecha-chip"><span>{label}</span><span style={{ color: "var(--muted2)" }}>—</span></div>;
+  return <div className="fecha-chip"><span>{label}</span><span>{fmtDateTime(fecha)}</span></div>;
+}
+
 function Timeline({ historial }) {
-  if (!historial?.length) return <div className="text-muted" style={{ fontSize: 11 }}>Sin historial</div>;
+  if (!historial?.length) return <div style={{ fontSize: 11, color: "var(--muted)" }}>Sin historial</div>;
   const icon = ev => {
     if (ev.includes("creada")) return { i: "◎", c: "c" };
-    if (ev.includes("probado") || ev.includes("OC") || ev.includes("Tracker")) return { i: "✓", c: "a" };
+    if (ev.includes("probado") || ev.includes("OC") || ev.includes("Compra")) return { i: "✓", c: "a" };
     if (ev.includes("echazado") || ev.includes("evuelto")) return { i: "✗", c: "r" };
     return { i: "·", c: "u" };
   };
-  return <ul className="tl">{[...historial].sort((a, b) => new Date(a.fecha) - new Date(b.fecha)).map((h, i) => {
+  return <ul className="tl">{[...historial].sort((a, b) => new Date(a.fecha || a.created_at) - new Date(b.fecha || b.created_at)).map((h, i) => {
     const { i: ic, c } = icon(h.evento);
     return <li key={i} className="tl-item">
       <div className={`tl-dot ${c}`}>{ic}</div>
-      <div><div className="tl-ev">{h.evento}</div><div className="tl-meta">{fmtDate(h.fecha)} · {h.usuario}{h.detalle ? ` · ${h.detalle}` : ""}</div></div>
+      <div><div className="tl-ev">{h.evento}</div><div className="tl-meta">{fmtDateTime(h.fecha || h.created_at)} · {h.usuario}{h.detalle ? ` · ${h.detalle}` : ""}</div></div>
     </li>;
   })}</ul>;
 }
 
-// ─── MODAL: APROBAR CONDICIONAL ───────────────────────────────────────────────
-function AprobarCondicionalModal({ req, proveedores, onClose, onSave }) {
-  const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "" });
-  const [items, setItems] = useState(req.requisicion_items?.length ? req.requisicion_items.map(it => ({ ...it })) : [blank()]);
+// ─── MODAL: APROBAR (aprobador) — con consolidar grupos ───────────────────────
+function AprobarModal({ req, onClose, onSave }) {
+  const items = req.requisicion_items || [];
+  const [asignaciones, setAsignaciones] = useState(items.map(() => "A"));
   const [nota, setNota] = useState("");
   const [saving, setSaving] = useState(false);
-  const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
+  const grupos = [...new Set(asignaciones)].sort();
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.actualizarItems(req.id, items.filter(it => it.descripcion?.trim()).map(({ id: _id, requisicion_id: _rid, ...rest }) => rest));
+      // Crear líneas en el tracker automáticamente
+      const lineas = grupos.map(g => {
+        const itemsGrupo = items.filter((_, i) => asignaciones[i] === g);
+        return {
+          grupo: g,
+          descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")} — ${req.titulo}`,
+          items_detalle: itemsGrupo,
+          status: "en_cotizacion",
+          fecha_solicitud: req.created_at,
+          fecha_aprobacion: new Date().toISOString(),
+        };
+      });
+      await api.crearTrackerLineas(req.id, lineas);
+      await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_aprobacion: new Date().toISOString() }, `Aprobado para cotizar — ${grupos.length} grupo${grupos.length > 1 ? "s" : ""}${nota ? ` · ${nota}` : ""}`, nota || null);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="mhdr">
+          <div><div className="mtitle">APROBAR Y CONSOLIDAR EN TRACKER</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div></div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          <div className="info-box accent mb12" style={{ fontSize: 11 }}>
+            Asigná cada ítem a un grupo. Ítems del mismo grupo se consolidan en una línea del Tracker para cotizar juntos.
+          </div>
+          <table className="items-edit">
+            <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo tracker</th></tr></thead>
+            <tbody>
+              {items.map((it, i) => <tr key={i}>
+                <td>{it.descripcion}</td>
+                <td className="text-mono">{it.cantidad} {it.unidad}</td>
+                <td><select value={asignaciones[i]} onChange={e => { const a = [...asignaciones]; a[i] = e.target.value; setAsignaciones(a); }} style={{ width: 60 }}>{GRUPOS_OPCIONES.map(g => <option key={g}>{g}</option>)}</select></td>
+              </tr>)}
+            </tbody>
+          </table>
+          <div className="mt12"><div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {grupos.map(g => {
+              const n = items.filter((_, i) => asignaciones[i] === g).length;
+              return <div key={g} className="flex-gap"><div className="grupo-chip">{g}</div><span style={{ fontSize: 11, color: "var(--muted)" }}>{n} ítem{n > 1 ? "s" : ""}</span></div>;
+            })}
+          </div></div>
+          <FG label="Nota para el comprador (opcional)"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: Verificar disponibilidad antes de cotizar..." /></FG>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : `✓ Aprobar → Tracker (${grupos.length} línea${grupos.length > 1 ? "s" : ""})`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: APROBAR CONDICIONAL (aprobador edita ítems primero) ───────────────
+function AprobarCondicionalModal({ req, onClose, onSave }) {
+  const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "" });
+  const [items, setItems] = useState(req.requisicion_items?.length ? req.requisicion_items.map(it => ({ ...it })) : [blank()]);
+  const [asignaciones, setAsignaciones] = useState((req.requisicion_items || [blank()]).map(() => "A"));
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState(1); // 1: editar items, 2: agrupar
+  const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
+
+  const handleSave = async () => {
+    const itemsValidos = items.filter(it => it.descripcion?.trim());
+    setSaving(true);
+    try {
+      await api.actualizarItems(req.id, itemsValidos.map(({ id: _id, requisicion_id: _rid, ...rest }) => rest));
+      const grupos = [...new Set(asignaciones.slice(0, itemsValidos.length))].sort();
+      const lineas = grupos.map(g => ({
+        grupo: g,
+        descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")} — ${req.titulo}`,
+        items_detalle: itemsValidos.filter((_, i) => asignaciones[i] === g),
+        status: "en_cotizacion",
+        fecha_solicitud: req.created_at,
+        fecha_aprobacion: new Date().toISOString(),
+      }));
+      await api.crearTrackerLineas(req.id, lineas);
       await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_aprobacion: new Date().toISOString() }, `Aprobado con modificaciones${nota ? ` — ${nota}` : ""}`, nota || null);
-      onSave(await api.getRequisicion(req.id));
+      onSave();
     } finally { setSaving(false); }
   };
 
@@ -313,232 +397,46 @@ function AprobarCondicionalModal({ req, proveedores, onClose, onSave }) {
           <button className="mclose" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
-          <div className="info-box warn mb12" style={{ fontSize: 11 }}>Editá ítems antes de aprobar. Los cambios quedan registrados.</div>
-          <div className="table-wrap">
-            <table className="items-edit">
-              <thead><tr><th style={{ width: "35%" }}>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th><th></th></tr></thead>
-              <tbody>
-                {items.map((it, i) => <tr key={it.id || i}>
-                  <td><input value={it.descripcion || ""} onChange={e => setItem(i, "descripcion", e.target.value)} /></td>
-                  <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
-                  <td><input value={it.unidad || ""} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 55 }} /></td>
-                  <td>
-                    <select value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)}>
-                      <option value="">Sin sugerencia</option>
-                      {proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
-                    </select>
-                  </td>
-                  <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
-                </tr>)}
-              </tbody>
-            </table>
-          </div>
-          <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
-          <div className="mt12"><FG label="Nota (opcional)"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: Se ajustó cantidad del ítem 1..." /></FG></div>
-        </div>
-        <div className="mftr">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "..." : "Aprobar con cambios → Tracker"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MODAL: CONFIRMAR VALOR ───────────────────────────────────────────────────
-function ConfirmarValorModal({ req, onClose, onSave }) {
-  const [aprobado, setAprobado] = useState(true);
-  const [nota, setNota] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const nuevoStatus = aprobado ? "aprobado" : "rechazado";
-      await api.actualizarRequisicion(req.id, { status: nuevoStatus }, aprobado ? `Valor confirmado y aprobado${nota ? ` — ${nota}` : ""}` : `Rechazado por valor${nota ? ` — ${nota}` : ""}`, nota || null);
-      onSave();
-    } finally { setSaving(false); }
-  };
-
-  return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 540 }}>
-        <div className="mhdr"><div className="mtitle">CONFIRMACIÓN DE VALOR</div><button className="mclose" onClick={onClose}>✕</button></div>
-        <div className="mbody">
-          <div className="info-box orange mb12" style={{ fontSize: 12 }}>El comprador solicita confirmación del valor cotizado antes de proceder.</div>
-          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
-          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px", marginBottom: 14 }}>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
-              <input type="radio" checked={aprobado} onChange={() => setAprobado(true)} style={{ marginTop: 2, accentColor: "var(--accent2)" }} />
-              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent2)" }}>✓ Confirmar y aprobar</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor es aceptable. Se procede con la compra.</div></div>
-            </label>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
-              <input type="radio" checked={!aprobado} onChange={() => setAprobado(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
-              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>✕ Rechazar por valor</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor excede lo aceptable.</div></div>
-            </label>
-          </div>
-          <FG label="Comentario (opcional)"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Explicación adicional..." /></FG>
-        </div>
-        <div className="mftr">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className={`btn ${aprobado ? "btn-success" : "btn-danger"}`} onClick={handleSave} disabled={saving}>
-            {saving ? "..." : aprobado ? "✓ Confirmar y aprobar" : "✕ Rechazar"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MODAL: VER REQUISICIÓN ───────────────────────────────────────────────────
-function ReqModal({ req: initialReq, proveedores, onClose, onUpdate, onMoverTracker, onRechazar }) {
-  const [req, setReq] = useState(initialReq);
-  const [tab, setTab] = useState("detalle");
-  const [saving, setSaving] = useState(false);
-  const [showAprobarCond, setShowAprobarCond] = useState(false);
-  const [showConfirmarValor, setShowConfirmarValor] = useState(false);
-  const remitoRef = useRef();
-  const [uploadingRemito, setUploadingRemito] = useState(false);
-
-  const esParaAprobar = req.status === "pendiente_aprobacion";
-  const esParaCotizar = req.status === "aprobado_cotizar";
-  const esParaConfirmar = req.status === "pendiente_confirmacion";
-
-  const handleAprobar = async () => {
-    setSaving(true);
-    try {
-      await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_aprobacion: new Date().toISOString() }, "Aprobado para cotizar");
-      const fresh = await api.getRequisicion(req.id);
-      onUpdate(fresh); onMoverTracker(fresh);
-    } finally { setSaving(false); }
-  };
-
-  const handleSolicitarConfirmacion = async () => {
-    setSaving(true);
-    try {
-      await api.actualizarRequisicion(req.id, { status: "pendiente_confirmacion" }, "Pendiente confirmación de valor");
-      onUpdate({ ...req, status: "pendiente_confirmacion" }); onClose();
-    } finally { setSaving(false); }
-  };
-
-  const handleUploadRemito = async (file) => {
-    setUploadingRemito(true);
-    try {
-      const url = await api.subirAdjunto(file, `remitos/${req.id}/${Date.now()}_${file.name}`);
-      const updated = await api.actualizarRequisicion(req.id, { status: "entregado", remito_url: url }, "Remito adjuntado — entregado");
-      setReq(updated); onUpdate(updated);
-    } catch (e) { alert("Error al subir remito: " + e.message); }
-    finally { setUploadingRemito(false); }
-  };
-
-  if (showAprobarCond) return <AprobarCondicionalModal req={req} proveedores={proveedores} onClose={() => setShowAprobarCond(false)} onSave={(fresh) => { setShowAprobarCond(false); onUpdate(fresh); onMoverTracker(fresh); }} />;
-  if (showConfirmarValor) return <ConfirmarValorModal req={req} onClose={() => setShowConfirmarValor(false)} onSave={() => { setShowConfirmarValor(false); onClose(); onUpdate({ ...req, status: "aprobado" }); }} />;
-
-  return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="mhdr">
-          <div>
-            <div className="mtitle">REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
-            <div className="flex-gap mt8">
-              <StatusBadge status={req.status} /><UrgBadge urgencia={req.urgencia} />
-              <span className="tag">{req.base_buque}</span><span className="tag">{req.area}</span>
-              {req.veces_devuelto > 0 && <span className="badge b-orange">↩ Devuelta {req.veces_devuelto}x</span>}
-            </div>
-          </div>
-          <button className="mclose" onClick={onClose}>✕</button>
-        </div>
-        <div className="mbody" style={{ paddingBottom: 0 }}>
-          <div className="tabs-row">
-            {["detalle", "historial"].map(t => <div key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "detalle" ? "Detalle" : "Historial"}</div>)}
-          </div>
-          {tab === "detalle" && <>
-            <div className="form-grid mb12">
-              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SOLICITANTE</div>{req.solicitado_por}</div>
-              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>FECHA NECESARIA</div>{fmtDate(req.fecha_necesaria) || "No especificada"}</div>
-              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>TIPO</div>{req.tipo_requisicion || "—"}</div>
-              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SUB-ÁREA</div>{req.subarea || "—"}</div>
-            </div>
-            {req.observaciones && <div className="info-box mb12">{req.observaciones}</div>}
-            {req.remito_url && <div className="info-box accent mb12" style={{ fontSize: 12 }}>
-              📎 Remito adjunto: <a href={req.remito_url} target="_blank" rel="noreferrer" style={{ color: "var(--blue)" }}>Ver remito firmado</a>
-            </div>}
-            <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: 2, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>Ítems</div>
+          {step === 1 && <>
+            <div className="info-box warn mb12" style={{ fontSize: 11 }}>Paso 1: Editá los ítems antes de aprobar.</div>
             <div className="table-wrap">
-              <table>
-                <thead><tr><th>#</th><th>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th></tr></thead>
+              <table className="items-edit">
+                <thead><tr><th style={{ width: "35%" }}>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th><th></th></tr></thead>
                 <tbody>
-                  {(req.requisicion_items || []).map((it, i) => <tr key={i}>
-                    <td className="text-mono text-muted">{it.nro_linea}</td>
-                    <td>{it.descripcion}</td>
-                    <td className="text-mono">{it.cantidad}</td>
-                    <td className="text-muted">{it.unidad}</td>
-                    <td className="text-muted">{it.proveedor_sugerido || "—"}</td>
+                  {items.map((it, i) => <tr key={it.id || i}>
+                    <td><input value={it.descripcion || ""} onChange={e => setItem(i, "descripcion", e.target.value)} /></td>
+                    <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
+                    <td><input value={it.unidad || ""} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 55 }} /></td>
+                    <td><input value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)} /></td>
+                    <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
                   </tr>)}
                 </tbody>
               </table>
             </div>
-            {(req.status === "en_compra" || req.status === "aprobado") && !req.remito_url && <>
-              <div className="form-section">Adjuntar remito firmado</div>
-              <div className="info-box warn mb12" style={{ fontSize: 11 }}>Adjuntá el remito firmado para cerrar la requisición.</div>
-              <input ref={remitoRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={e => handleUploadRemito(e.target.files[0])} />
-              <button className="btn btn-ghost btn-sm" onClick={() => remitoRef.current.click()} disabled={uploadingRemito}>{uploadingRemito ? "⏳ Subiendo..." : "📎 Adjuntar remito"}</button>
-            </>}
+            <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
+            <FG label="Nota para el comprador (opcional)" full><textarea value={nota} onChange={e => setNota(e.target.value)} style={{ marginTop: 8 }} /></FG>
           </>}
-          {tab === "historial" && <Timeline historial={req.requisicion_historial} />}
-        </div>
-        <div className="mftr">
-          <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
-          {(esParaAprobar || esParaCotizar) && <button className="btn btn-danger" onClick={() => { onClose(); onRechazar(req); }}>Rechazar</button>}
-          {(esParaAprobar || esParaCotizar) && <button className="btn btn-cond" onClick={() => setShowAprobarCond(true)}>Aprobar condicional</button>}
-          {esParaCotizar && <button className="btn btn-confirm" onClick={handleSolicitarConfirmacion} disabled={saving}>Solicitar conf. valor</button>}
-          {(esParaAprobar || esParaCotizar) && <button className="btn btn-primary" onClick={handleAprobar} disabled={saving}>{saving ? "..." : "Aprobar → Tracker"}</button>}
-          {esParaConfirmar && <button className="btn btn-primary" onClick={() => setShowConfirmarValor(true)}>Confirmar valor</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MODAL: CONSOLIDAR ────────────────────────────────────────────────────────
-function ConsolidarModal({ req, onClose, onSave }) {
-  const items = req.requisicion_items || [];
-  const [asignaciones, setAsignaciones] = useState(items.map(() => "A"));
-  const [saving, setSaving] = useState(false);
-  const grupos = [...new Set(asignaciones)].sort();
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await api.crearTrackerLineas(req.id, grupos.map(g => ({
-        grupo: g, descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")}`,
-        items_detalle: items.filter((_, i) => asignaciones[i] === g), status: "en_cotizacion",
-      })));
-      await api.actualizarRequisicion(req.id, { status: "en_compra" }, `Movido al Tracker (${grupos.length} grupo${grupos.length > 1 ? "s" : ""})`);
-      onSave();
-    } finally { setSaving(false); }
-  };
-
-  return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="mhdr"><div className="mtitle">CONSOLIDAR EN TRACKER</div><button className="mclose" onClick={onClose}>✕</button></div>
-        <div className="mbody">
-          <div className="info-box accent mb12" style={{ fontSize: 11 }}>Asigná cada ítem a un grupo. Ítems del mismo grupo se consolidan en una línea.</div>
-          <table className="items-edit">
-            <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo</th></tr></thead>
-            <tbody>
-              {items.map((it, i) => <tr key={i}>
-                <td>{it.descripcion}</td>
-                <td className="text-mono">{it.cantidad} {it.unidad}</td>
-                <td><select value={asignaciones[i]} onChange={e => { const a = [...asignaciones]; a[i] = e.target.value; setAsignaciones(a); }} style={{ width: 60 }}>{GRUPOS_OPCIONES.map(g => <option key={g}>{g}</option>)}</select></td>
-              </tr>)}
-            </tbody>
-          </table>
+          {step === 2 && <>
+            <div className="info-box accent mb12" style={{ fontSize: 11 }}>Paso 2: Agrupá los ítems para el tracker.</div>
+            <table className="items-edit">
+              <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo</th></tr></thead>
+              <tbody>
+                {items.filter(it => it.descripcion?.trim()).map((it, i) => <tr key={i}>
+                  <td>{it.descripcion}</td>
+                  <td className="text-mono">{it.cantidad} {it.unidad}</td>
+                  <td><select value={asignaciones[i] || "A"} onChange={e => { const a = [...asignaciones]; a[i] = e.target.value; setAsignaciones(a); }} style={{ width: 60 }}>{GRUPOS_OPCIONES.map(g => <option key={g}>{g}</option>)}</select></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </>}
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Guardando..." : `Crear ${grupos.length} línea${grupos.length > 1 ? "s" : ""}`}</button>
+          {step === 1 && <button className="btn btn-primary" onClick={() => setStep(2)} disabled={!items.some(it => it.descripcion?.trim())}>Siguiente → Agrupar</button>}
+          {step === 2 && <>
+            <button className="btn btn-ghost" onClick={() => setStep(1)}>← Volver</button>
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : "✓ Aprobar con cambios → Tracker"}</button>
+          </>}
         </div>
       </div>
     </div>
@@ -570,12 +468,7 @@ function RechazarModal({ req, onClose, onSave }) {
       <div className="modal" style={{ maxWidth: 520 }}>
         <div className="mhdr"><div className="mtitle">RECHAZAR / DEVOLVER</div><button className="mclose" onClick={onClose}>✕</button></div>
         <div className="mbody">
-          <FG label="Categoría *">
-            <select value={categoria} onChange={e => setCategoria(e.target.value)}>
-              <option value="">Seleccionar...</option>
-              {CATEGORIAS_RECHAZO.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </FG>
+          <FG label="Motivo *"><select value={categoria} onChange={e => setCategoria(e.target.value)}><option value="">Seleccionar...</option>{CATEGORIAS_RECHAZO.map(c => <option key={c}>{c}</option>)}</select></FG>
           <div className="mt12"><FG label="Detalle adicional"><textarea value={texto} onChange={e => setTexto(e.target.value)} /></FG></div>
           <div className="mt12" style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px" }}>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 10 }}>
@@ -590,17 +483,53 @@ function RechazarModal({ req, onClose, onSave }) {
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>
-            {saving ? "..." : devolver ? "↩ Devolver" : "✕ Rechazar"}
-          </button>
+          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>{saving ? "..." : devolver ? "↩ Devolver" : "✕ Rechazar"}</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── MODAL: TRACKER LÍNEA ─────────────────────────────────────────────────────
-function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
+// ─── MODAL: VER REQ (solo lectura con historial) ──────────────────────────────
+function ReqDetalleModal({ req, onClose }) {
+  const [tab, setTab] = useState("detalle");
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="mhdr">
+          <div>
+            <div className="mtitle">REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
+            <div className="flex-gap mt8"><StatusBadge status={req.status} /><UrgBadge urgencia={req.urgencia} /><span className="tag">{req.base_buque}</span><span className="tag">{req.area}</span></div>
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody" style={{ paddingBottom: 0 }}>
+          <div className="tabs-row">{["detalle", "historial"].map(t => <div key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "detalle" ? "Detalle" : "Historial"}</div>)}</div>
+          {tab === "detalle" && <>
+            <div className="form-grid mb12">
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SOLICITANTE</div>{req.solicitado_por}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>FECHA NECESARIA</div>{fmtDate(req.fecha_necesaria) || "—"}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>TIPO</div>{req.tipo_requisicion || "—"}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SUB-ÁREA</div>{req.subarea || "—"}</div>
+            </div>
+            {req.observaciones && <div className="info-box mb12">{req.observaciones}</div>}
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th></tr></thead>
+                <tbody>{(req.requisicion_items || []).map((it, i) => <tr key={i}><td className="text-mono text-muted">{it.nro_linea}</td><td>{it.descripcion}</td><td className="text-mono">{it.cantidad}</td><td className="text-muted">{it.unidad}</td><td className="text-muted">{it.proveedor_sugerido || "—"}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </>}
+          {tab === "historial" && <Timeline historial={req.requisicion_historial} />}
+        </div>
+        <div className="mftr"><button className="btn btn-ghost" onClick={onClose}>Cerrar</button></div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: COTIZAR Y COMPRAR (comprador) ─────────────────────────────────────
+function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirmacion }) {
   const emptyCotiz = () => ({ proveedor: "", precio: "", moneda: "ARS", plazo: "" });
   const initCotiz = () => { const c = linea.cotizaciones || {}; return [c.c1 || emptyCotiz(), c.c2 || emptyCotiz(), c.c3 || emptyCotiz()]; };
   const [form, setForm] = useState({
@@ -610,6 +539,7 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
     plazo_pago: linea.plazo_pago || "", fecha_entrega_prom: linea.fecha_entrega_prom || "",
     fecha_entrega_real: linea.fecha_entrega_real || "", status: linea.status || "en_cotizacion",
     notas: linea.notas || "", nro_remito: linea.nro_remito || "",
+    nota_confirmacion: linea.nota_confirmacion || "",
   });
   const [cotiz, setCotiz] = useState(initCotiz());
   const [adjuntos, setAdjuntos] = useState(linea.cotizaciones?.adjuntos || []);
@@ -617,7 +547,6 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const fileRef = useRef();
-  const remitoRef = useRef();
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setCotizField = (idx, k, v) => {
@@ -639,22 +568,42 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
       costo_real: f.costo_real !== "" && f.costo_real != null ? parseFloat(f.costo_real) : null,
       moneda_real: f.moneda_real || "ARS", plazo_pago: f.plazo_pago || null,
       fecha_entrega_prom: f.fecha_entrega_prom || null, fecha_entrega_real: f.fecha_entrega_real || null,
-      status: f.status || "en_cotizacion", notas: f.notas || null, nro_remito: f.nro_remito || null,
+      status: f.status, notas: f.notas || null, nro_remito: f.nro_remito || null,
+      nota_confirmacion: f.nota_confirmacion || null,
       cotizaciones: { c1: cotiz[0], c2: cotiz[1], c3: cotiz[2], adjuntos },
     };
   };
 
-  const handleSave = async (extra = {}) => {
+  const handleGuardar = async () => {
     setSaving(true);
-    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload(extra))); }
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload())); }
     catch (e) { alert("Error: " + e.message); }
     finally { setSaving(false); }
   };
 
-  const handleEntrega = async () => {
+  const handleComprar = async () => {
+    if (!form.proveedor_elegido) return alert("Seleccioná el proveedor elegido antes de comprar");
     setSaving(true);
-    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "entregado", fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0] }))); }
+    try {
+      onSave(await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "oc_emitida", fecha_compra: new Date().toISOString() })));
+    } catch (e) { alert("Error: " + e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleConfirmarEntrega = async () => {
+    setSaving(true);
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "entregado", fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0], fecha_entrega_ts: new Date().toISOString() }))); }
     catch (e) { alert("Error."); }
+    finally { setSaving(false); }
+  };
+
+  const handleSolicitarConf = async () => {
+    if (!form.costo_real) return alert("Ingresá el valor cotizado antes de solicitar confirmación");
+    setSaving(true);
+    try {
+      await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "en_cotizacion" }));
+      onSolicitarConfirmacion({ ...linea, ...buildPayload() });
+    } catch (e) { alert("Error."); }
     finally { setSaving(false); }
   };
 
@@ -669,24 +618,14 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
         nuevos.push({ nombre: file.name, url, path });
       }
       setAdjuntos(prev => [...prev, ...nuevos]);
-    } catch (e) { alert("Error al subir archivo."); }
-    finally { setUploading(false); }
-  };
-
-  const handleUploadRemito = async (file) => {
-    setUploading(true);
-    try {
-      const path = `remitos/${linea.id}/${Date.now()}_${file.name}`;
-      const url = await api.subirAdjunto(file, path);
-      set("nro_remito", form.nro_remito || file.name);
-      setAdjuntos(prev => [...prev, { nombre: `REMITO: ${file.name}`, url, path }]);
-    } catch (e) { alert("Error al subir remito."); }
+    } catch (e) { alert("Error al subir."); }
     finally { setUploading(false); }
   };
 
   const req = linea.requisiciones;
   const itemsDetalle = linea.items_detalle || [];
-  const COTIZ_LABELS = ["Cotización elegida", "Cotización 2", "Cotización 3"];
+  const esConfirmacionPendiente = linea.status === "pendiente_confirmacion";
+
   const COTIZ_STYLES = [
     { border: "2px solid var(--accent2)", background: "#F0FDF4" },
     { border: "1px solid var(--border)", background: "var(--surface2)" },
@@ -699,11 +638,13 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
         <div className="mhdr">
           <div>
             <div className="flex-gap"><div className="grupo-chip">{linea.grupo}</div><div className="mtitle">{form.descripcion}</div></div>
-            {req && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} · {req.base_buque}</div>}
+            {req && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} · {req.base_buque} · {req.area}{req.subarea ? ` › ${req.subarea}` : ""}</div>}
           </div>
           <button className="mclose" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
+          {esConfirmacionPendiente && <div className="info-box orange mb12" style={{ fontSize: 12 }}>⏳ Esta línea está esperando confirmación de valor por parte del aprobador.</div>}
+
           {itemsDetalle.length > 0 && <div className="mb12">
             <button className="btn btn-ghost btn-sm" onClick={() => setShowDetail(!showDetail)}>{showDetail ? "▲" : "▼"} Ver ítems ({itemsDetalle.length})</button>
             {showDetail && <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "10px 12px", marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
@@ -711,17 +652,11 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             </div>}
           </div>}
 
-          <div className="form-section">Estado</div>
-          <div className="form-grid">
-            <FG label="Status"><select value={form.status} onChange={e => set("status", e.target.value)}>{Object.entries(TRACKER_STATUS).filter(([k]) => k !== "archivado").map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></FG>
-            <FG label="Descripción"><input value={form.descripcion} onChange={e => set("descripcion", e.target.value)} /></FG>
-          </div>
-
           <div className="form-section">Cotizaciones</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             {cotiz.map((c, i) => (
               <div key={i} style={{ borderRadius: "var(--r2)", padding: "12px 14px", ...COTIZ_STYLES[i] }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && "⭐ "}{COTIZ_LABELS[i]}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && "⭐ "}{["Cotización elegida", "Cotización 2", "Cotización 3"][i]}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <FG label="Proveedor"><select value={c.proveedor} onChange={e => setCotizField(i, "proveedor", e.target.value)} style={{ fontSize: 12 }}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
                   <FG label="Precio"><input type="number" value={c.precio} onChange={e => setCotizField(i, "precio", e.target.value)} style={{ fontSize: 12 }} /></FG>
@@ -732,13 +667,15 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             ))}
           </div>
 
-          <div className="form-section">OC y entrega</div>
+          <div className="form-section">Proveedor elegido y OC</div>
           <div className="form-grid">
-            <FG label="Proveedor elegido"><select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
+            <FG label="Proveedor elegido *"><select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
             <FG label="N° OC"><input value={form.nro_oc} onChange={e => set("nro_oc", e.target.value)} placeholder="OC-0001" /></FG>
           </div>
           <FG label="¿Por qué este proveedor?"><textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} /></FG>
-          <div className="form-grid-3 mt12">
+
+          <div className="form-section">Precio y entrega</div>
+          <div className="form-grid-3">
             <FG label="Costo real"><input type="number" value={form.costo_real} onChange={e => set("costo_real", e.target.value)} /></FG>
             <FG label="Moneda"><select value={form.moneda_real} onChange={e => set("moneda_real", e.target.value)}><option>ARS</option><option>USD</option></select></FG>
             <FG label="Plazo de pago"><select value={form.plazo_pago} onChange={e => set("plazo_pago", e.target.value)}><option value="">—</option>{PLAZO_PAGO_OPTIONS.map(p => <option key={p}>{p}</option>)}</select></FG>
@@ -746,16 +683,17 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
             <FG label="Entrega real"><input type="date" value={form.fecha_entrega_real} onChange={e => set("fecha_entrega_real", e.target.value)} /></FG>
             <FG label="N° Remito"><input value={form.nro_remito} onChange={e => set("nro_remito", e.target.value)} placeholder="0001-00001234" /></FG>
           </div>
-          <FG label="Notas"><textarea value={form.notas} onChange={e => set("notas", e.target.value)} /></FG>
 
-          <div className="form-section">Adjuntos (presupuestos y remito)</div>
+          {/* Campo nota para confirmación de valor */}
+          <FG label="Nota para el aprobador (si solicita confirmación de valor)">
+            <textarea value={form.nota_confirmacion} onChange={e => set("nota_confirmacion", e.target.value)} placeholder="Ej: El precio es USD 1.200, mayor al habitual. ¿Autorizamos?" />
+          </FG>
+          <FG label="Notas internas"><textarea value={form.notas} onChange={e => set("notas", e.target.value)} /></FG>
+
+          <div className="form-section">Adjuntos</div>
           <input ref={fileRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style={{ display: "none" }} onChange={e => handleUpload(e.target.files)} />
-          <input ref={remitoRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={e => handleUploadRemito(e.target.files[0])} />
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>📎 Adjuntar presupuesto</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => remitoRef.current.click()} disabled={uploading}>📄 Adjuntar remito firmado</button>
-          </div>
-          {adjuntos.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>📎 Adjuntar presupuesto / remito</button>
+          {adjuntos.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
             {adjuntos.map((adj, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px" }}>
                 <span>📄</span>
@@ -767,40 +705,92 @@ function TrackerLineaModal({ linea, proveedores, onClose, onSave }) {
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-success btn-sm" onClick={handleEntrega} disabled={saving}>✓ Confirmar entrega</button>
-          <button className="btn btn-primary" onClick={() => handleSave()} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</button>
+          <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
+          <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
+          <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>💾 Guardar</button>
+          <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "🛒 Comprar"}</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── PAGE: INBOX ──────────────────────────────────────────────────────────────
-function PageInbox({ statuses, titulo, notify, onNeedRefresh }) {
+// ─── MODAL: CONFIRMAR VALOR (aprobador) ───────────────────────────────────────
+function ConfirmarValorModal({ linea, onClose, onSave }) {
+  const [aprobado, setAprobado] = useState(true);
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const nuevoStatus = aprobado ? "oc_emitida" : "en_cotizacion";
+      await api.actualizarTrackerLinea(linea.id, {
+        status: nuevoStatus,
+        nota_confirmacion_respuesta: nota || null,
+        fecha_compra: aprobado ? new Date().toISOString() : null,
+      });
+      // También actualizar la requisición si corresponde
+      if (linea.requisiciones?.id) {
+        await api.actualizarRequisicion(linea.requisiciones.id, { status: aprobado ? "aprobado" : "aprobado_cotizar" }, aprobado ? `Valor confirmado — compra autorizada${nota ? ` · ${nota}` : ""}` : `Valor rechazado — vuelve a cotizar${nota ? ` · ${nota}` : ""}`, nota || null);
+      }
+      onSave();
+    } finally { setSaving(false); }
+  };
+
+  const req = linea.requisiciones;
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 560 }}>
+        <div className="mhdr"><div className="mtitle">CONFIRMAR VALOR</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="mbody">
+          <div className="info-box orange mb12" style={{ fontSize: 12 }}>El comprador solicita confirmación del valor cotizado antes de emitir la OC.</div>
+          {req && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>}
+          <div className="form-grid mb12">
+            <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>PROVEEDOR</div>{linea.proveedor_elegido || "—"}</div>
+            <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>VALOR COTIZADO</div><strong>{linea.costo_real ? fmt(linea.costo_real, linea.moneda_real) : "—"}</strong></div>
+          </div>
+          {linea.nota_confirmacion && <div className="info-box warn mb12" style={{ fontSize: 12 }}><strong>Nota del comprador:</strong> {linea.nota_confirmacion}</div>}
+          {linea.motivo_proveedor && <div className="info-box mb12" style={{ fontSize: 12 }}><strong>Justificación:</strong> {linea.motivo_proveedor}</div>}
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px", marginBottom: 14 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
+              <input type="radio" checked={aprobado} onChange={() => setAprobado(true)} style={{ marginTop: 2, accentColor: "var(--accent2)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent2)" }}>✓ Autorizar compra</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor es aceptable. El comprador puede emitir la OC.</div></div>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+              <input type="radio" checked={!aprobado} onChange={() => setAprobado(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>✕ Volver a cotizar</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor no es aceptable. El comprador debe buscar alternativas.</div></div>
+            </label>
+          </div>
+          <FG label="Comentario para el comprador"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Explicación adicional..." /></FG>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className={`btn ${aprobado ? "btn-success" : "btn-danger"}`} onClick={handleSave} disabled={saving}>{saving ? "..." : aprobado ? "✓ Autorizar compra" : "✕ Volver a cotizar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGE: INBOX APROBACIÓN ───────────────────────────────────────────────────
+function PageInboxAprobacion({ notify, onNeedRefresh }) {
   const [reqs, setReqs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
-  const [consolidando, setConsolidando] = useState(null);
+  const [aprobando, setAprobando] = useState(null);
+  const [aprobandoCond, setAprobandoCond] = useState(null);
   const [rechazando, setRechazando] = useState(null);
-  const [proveedores, setProveedores] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try {
-      const [data, provs] = await Promise.all([api.getRequisiciones({ empresa: "Parana Logistica", statuses }), api.getProveedores()]);
-      setReqs(data); setProveedores(provs);
-    } finally { setLoading(false); }
-  }, [statuses.join(",")]);
+    try { setReqs(await api.getRequisiciones({ empresa: "Parana Logistica", statuses: ["pendiente_aprobacion"] })); }
+    finally { setLoading(false); }
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const handleUpdate = (updated) => setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r).filter(r => statuses.includes(r.status)));
-
-  const handleMoverTracker = async (req) => {
-    setSelected(null);
-    setConsolidando(await api.getRequisicion(req.id));
-  };
-
+  const handleAprobado = () => { setAprobando(null); setAprobandoCond(null); notify("Aprobada y enviada al tracker", "success"); load(); onNeedRefresh(); };
   const handleRechazado = (updated, devolver) => {
     setRechazando(null);
     if (devolver) { setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r)); notify("Devuelta al solicitante", "warn"); }
@@ -808,32 +798,30 @@ function PageInbox({ statuses, titulo, notify, onNeedRefresh }) {
     onNeedRefresh();
   };
 
-  const rowClass = (r) => {
-    if (r.status === "pendiente_confirmacion") return "req-row pendiente-confirmacion";
-    if (r.veces_devuelto > 0) return "req-row devuelto";
-    return "req-row unread";
-  };
-
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>📥 {titulo}</div>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>⏳ Pendientes de aprobación</div>
         <span className="ni-badge" style={{ position: "static" }}>{reqs.length}</span>
       </div>
-      {loading ? <div className="loading"><span className="spin">◌</span> Cargando...</div> :
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
         reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin requisiciones pendientes</div> :
         reqs.map(r => (
-          <div key={r.id} className={rowClass(r)} onClick={() => setSelected(r)}>
+          <div key={r.id} className={`req-row ${r.veces_devuelto > 0 ? "devuelto" : "unread"}`}>
             <div className="flex-between mb8">
-              <div className="flex-gap">
+              <div className="flex-gap" onClick={() => setSelected(r)} style={{ flex: 1, cursor: "pointer" }}>
                 <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
-                <StatusBadge status={r.status} /><UrgBadge urgencia={r.urgencia} />
+                <UrgBadge urgencia={r.urgencia} />
                 {r.veces_devuelto > 0 && <span className="badge b-orange">↩ {r.veces_devuelto}x</span>}
               </div>
-              <span style={{ fontSize: 10, color: "var(--muted)" }}>{fmtDate(r.created_at)}</span>
+              <div className="flex-gap">
+                <button className="btn btn-danger btn-sm" onClick={() => setRechazando(r)}>Rechazar</button>
+                <button className="btn btn-cond btn-sm" onClick={() => setAprobandoCond(r)}>Aprob. condicional</button>
+                <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>✓ Aprobar →</button>
+              </div>
             </div>
-            <div className="req-title">{r.titulo}</div>
-            <div className="req-meta">
+            <div className="req-title" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>{r.titulo}</div>
+            <div className="req-meta" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
               <span>{r.base_buque}</span><span>·</span>
               <span>{r.area}{r.subarea ? ` › ${r.subarea}` : ""}</span><span>·</span>
               <span>{r.solicitado_por}</span>
@@ -842,14 +830,139 @@ function PageInbox({ statuses, titulo, notify, onNeedRefresh }) {
           </div>
         ))
       }
-      {selected && <ReqModal req={selected} proveedores={proveedores} onClose={() => setSelected(null)} onUpdate={handleUpdate} onMoverTracker={handleMoverTracker} onRechazar={r => { setSelected(null); setRechazando(r); }} />}
-      {consolidando && <ConsolidarModal req={consolidando} onClose={() => setConsolidando(null)} onSave={() => { setConsolidando(null); notify("Movida al Tracker", "success"); load(); onNeedRefresh(); }} />}
+      {selected && <ReqDetalleModal req={selected} onClose={() => setSelected(null)} />}
+      {aprobando && <AprobarModal req={aprobando} onClose={() => setAprobando(null)} onSave={handleAprobado} />}
+      {aprobandoCond && <AprobarCondicionalModal req={aprobandoCond} onClose={() => setAprobandoCond(null)} onSave={handleAprobado} />}
       {rechazando && <RechazarModal req={rechazando} onClose={() => setRechazando(null)} onSave={handleRechazado} />}
     </div>
   );
 }
 
-// ─── PAGE: TRACKER COMPLETO ───────────────────────────────────────────────────
+// ─── PAGE: PARA COTIZAR (comprador ve líneas del tracker) ─────────────────────
+function PageParaCotizar({ notify, onNeedRefresh }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [confirmandoValor, setConfirmandoValor] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion"] }),
+        api.getProveedores()
+      ]);
+      setLineas(data); setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = (updated) => {
+    setSelected(null);
+    notify("Guardado", "success");
+    load(); onNeedRefresh();
+  };
+
+  const handleSolicitarConfirmacion = async (linea) => {
+    setSelected(null);
+    await api.actualizarTrackerLinea(linea.id, { ...linea, status: "pendiente_confirmacion" });
+    notify("Solicitud de confirmación de valor enviada al aprobador", "info");
+    load(); onNeedRefresh();
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>📥 Para cotizar</div>
+        <span className="ni-badge" style={{ position: "static", background: "var(--warn)" }}>{lineas.filter(l => l.status === "en_cotizacion").length}</span>
+        {lineas.filter(l => l.status === "pendiente_confirmacion").length > 0 && <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.filter(l => l.status === "pendiente_confirmacion").length} conf. pendiente</span>}
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin líneas para cotizar</div> :
+        lineas.map(l => {
+          const req = l.requisiciones;
+          const esPendConf = l.status === "pendiente_confirmacion";
+          return (
+            <div key={l.id} className={`req-row ${esPendConf ? "pend-confirm" : "unread"}`} onClick={() => setSelected(l)}>
+              <div className="flex-between mb8">
+                <div className="flex-gap">
+                  <div className="grupo-chip">{l.grupo}</div>
+                  {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
+                  <TrackerBadge status={l.status} />
+                </div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{req?.base_buque}</span>
+              </div>
+              <div className="req-title">{l.descripcion}</div>
+              <div className="req-meta">
+                {req?.solicitado_por && <span>{req.solicitado_por}</span>}
+                {l.proveedor_elegido && <><span>·</span><span>{l.proveedor_elegido}</span></>}
+                {l.costo_real && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)" }}>{fmt(l.costo_real, l.moneda_real)}</span></>}
+                {req?.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Nec: {fmtDate(req.fecha_necesaria)}</span></>}
+                {esPendConf && <span style={{ color: "var(--orange)", fontWeight: 600 }}>· Esperando conf. de valor</span>}
+              </div>
+            </div>
+          );
+        })
+      }
+
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={handleSolicitarConfirmacion} />}
+      {confirmandoValor && <ConfirmarValorModal linea={confirmandoValor} onClose={() => setConfirmandoValor(null)} onSave={() => { setConfirmandoValor(null); notify("Confirmación enviada", "success"); load(); onNeedRefresh(); }} />}
+    </div>
+  );
+}
+
+// ─── PAGE: CONFIRMACIÓN DE VALOR (aprobador) ──────────────────────────────────
+function PageConfirmacion({ notify, onNeedRefresh }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([api.getTrackerLineas({ status: "pendiente_confirmacion" }), api.getProveedores()]);
+      setLineas(data); setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>🔁 Confirmación de valor</div>
+        <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.length}</span>
+      </div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>Sin confirmaciones pendientes</div> :
+        lineas.map(l => {
+          const req = l.requisiciones;
+          return (
+            <div key={l.id} className="req-row pend-confirm" onClick={() => setSelected(l)}>
+              <div className="flex-between mb8">
+                <div className="flex-gap"><div className="grupo-chip">{l.grupo}</div>{req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}<span className="badge b-orange">Conf. pendiente</span></div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{req?.base_buque}</span>
+              </div>
+              <div className="req-title">{l.descripcion}</div>
+              <div className="req-meta">
+                {l.proveedor_elegido && <span>{l.proveedor_elegido}</span>}
+                {l.costo_real && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)", fontWeight: 700 }}>{fmt(l.costo_real, l.moneda_real)}</span></>}
+                {l.nota_confirmacion && <><span>·</span><span style={{ fontStyle: "italic" }}>"{l.nota_confirmacion.slice(0, 60)}{l.nota_confirmacion.length > 60 ? "..." : ""}"</span></>}
+              </div>
+            </div>
+          );
+        })
+      }
+      {selected && <ConfirmarValorModal linea={selected} onClose={() => setSelected(null)} onSave={() => { setSelected(null); notify("Confirmación procesada", "success"); load(); onNeedRefresh(); }} />}
+    </div>
+  );
+}
+
+// ─── PAGE: TRACKER GENERAL ────────────────────────────────────────────────────
 function PageTrackerGeneral({ notify, onNeedRefresh }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -862,7 +975,10 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, provs] = await Promise.all([api.getTrackerLineas({ statuses: ["en_cotizacion", "oc_emitida", "en_transito", "entregado"] }), api.getProveedores()]);
+      const [data, provs] = await Promise.all([
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito", "entregado"] }),
+        api.getProveedores()
+      ]);
       setLineas(data); setProveedores(provs);
     } finally { setLoading(false); }
   }, []);
@@ -905,13 +1021,17 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
     const rows = lineasFiltradas.map(l => {
       const req = l.requisiciones;
       return {
-        "REQ": req ? `REQ-${String(req.nro_solicitud).padStart(4, "0")}` : "", "Grupo": l.grupo || "",
-        "Descripción": l.descripcion || "", "Base/Buque": req?.base_buque || "",
-        "Área": req?.area || "", "Solicitante": req?.solicitado_por || "",
+        "REQ": req ? `REQ-${String(req.nro_solicitud).padStart(4, "0")}` : "",
+        "Grupo": l.grupo || "", "Descripción": l.descripcion || "",
+        "Base/Buque": req?.base_buque || "", "Área": req?.area || "",
+        "Sub-área": req?.subarea || "", "Solicitante": req?.solicitado_por || "",
         "Urgencia": req?.urgencia || "", "Estado": TRACKER_STATUS[l.status]?.label || l.status || "",
         "Proveedor": l.proveedor_elegido || "", "N° OC": l.nro_oc || "",
         "Costo real": l.costo_real || "", "Moneda": l.moneda_real || "",
         "Plazo pago": l.plazo_pago || "", "N° Remito": l.nro_remito || "",
+        "Fecha solicitud": l.fecha_solicitud ? fmtDateTime(l.fecha_solicitud) : "",
+        "Fecha aprobación": l.fecha_aprobacion ? fmtDateTime(l.fecha_aprobacion) : "",
+        "Fecha compra (OC)": l.fecha_compra ? fmtDateTime(l.fecha_compra) : "",
         "Entrega prometida": l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : "",
         "Entrega real": l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "",
         "Notas": l.notas || "",
@@ -970,18 +1090,19 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                   <th>OC</th>
                   <th>Remito</th>
                   <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th>Fechas</th>
                   <th className="sortable" onClick={() => handleSort("entrega")}>Entrega<SortIcon col="entrega" /></th>
                 </tr>
               </thead>
               <tbody>
                 {lineasFiltradas.length === 0
-                  ? <tr><td colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
+                  ? <tr><td colSpan={11} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
                   : lineasFiltradas.map(l => {
                       const req = l.requisiciones;
                       return (
                         <tr key={l.id} onClick={() => setSelected(l)}>
                           <td><div className="flex-gap"><div className="grupo-chip">{l.grupo}</div>{req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}</div></td>
-                          <td><div style={{ fontWeight: 600, fontSize: 12, maxWidth: 200 }}>{l.descripcion}</div></td>
+                          <td><div style={{ fontWeight: 600, fontSize: 12, maxWidth: 180 }}>{l.descripcion}</div></td>
                           <td style={{ fontSize: 12, color: "var(--muted)" }}>{req?.base_buque || "—"}</td>
                           <td>{req ? <UrgBadge urgencia={req.urgencia} /> : "—"}</td>
                           <td><TrackerBadge status={l.status} /></td>
@@ -989,6 +1110,14 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
                           <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                           <td>{l.nro_remito ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_remito}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                           <td className="text-mono" style={{ fontSize: 12 }}>{l.costo_real ? fmt(l.costo_real, l.moneda_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                              <FechaChip label="Solicitud" fecha={l.fecha_solicitud || req?.created_at} />
+                              <FechaChip label="Aprobación" fecha={l.fecha_aprobacion} />
+                              {l.fecha_compra && <FechaChip label="Compra" fecha={l.fecha_compra} />}
+                              {l.fecha_entrega_ts && <FechaChip label="Entrega" fecha={l.fecha_entrega_ts} />}
+                            </div>
+                          </td>
                           <td style={{ fontSize: 12, color: "var(--warn)" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
                         </tr>
                       );
@@ -999,12 +1128,12 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           </div>
         </div>
       }
-      {selected && <TrackerLineaModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { ...linea, status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} />}
     </div>
   );
 }
 
-// ─── PAGE: TRACKER SIMPLIFICADO (embarcados) ──────────────────────────────────
+// ─── PAGE: TRACKER SIMPLIFICADO ───────────────────────────────────────────────
 function PageTrackerSimple() {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1012,7 +1141,7 @@ function PageTrackerSimple() {
   const [busqueda, setBusqueda] = useState("");
 
   useEffect(() => {
-    api.getTrackerLineas({ statuses: ["en_cotizacion", "oc_emitida", "en_transito", "entregado"] }).then(d => { setLineas(d); setLoading(false); });
+    api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito", "entregado"] }).then(d => { setLineas(d); setLoading(false); });
   }, []);
 
   const bases = [...new Set(lineas.map(l => l.requisiciones?.base_buque).filter(Boolean))].sort();
@@ -1023,33 +1152,25 @@ function PageTrackerSimple() {
     return true;
   });
 
-  const rowClass = (l) => {
-    if (l.status === "entregado") return "tracker-simple-row entregado";
-    return "tracker-simple-row en-curso";
-  };
-
   return (
     <div>
-      <div className="info-box accent mb16" style={{ fontSize: 11 }}>
-        Vista de seguimiento — mostrás el estado de tus pedidos sin valores ni cotizaciones.
-      </div>
-
+      <div className="info-box accent mb16" style={{ fontSize: 11 }}>Vista de seguimiento — estado de pedidos sin valores ni cotizaciones.</div>
       <div className="filter-row">
-        <input className="filter-input" placeholder="🔍 Buscar pedido..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+        <input className="filter-input" placeholder="🔍 Buscar..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
         <select className="filter-select" value={filtroBase} onChange={e => setFiltroBase(e.target.value)}>
           <option value="">Todos los barcos</option>
           {bases.map(b => <option key={b}>{b}</option>)}
         </select>
-        {(filtroBase || busqueda) && <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroBase(""); setBusqueda(""); }}>✕ Limpiar</button>}
+        {(filtroBase || busqueda) && <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroBase(""); setBusqueda(""); }}>✕</button>}
         <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{filtradas.length} pedidos</span>
       </div>
-
-      {loading ? <div className="loading"><span className="spin">◌</span> Cargando...</div> :
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
         filtradas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>Sin pedidos</div> :
         filtradas.map(l => {
           const req = l.requisiciones;
+          const entregado = l.status === "entregado";
           return (
-            <div key={l.id} className={rowClass(l)}>
+            <div key={l.id} className={`tracker-simple-row ${entregado ? "entregado" : "en-curso"}`}>
               <div className="flex-between mb8">
                 <div className="flex-gap">
                   {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
@@ -1060,9 +1181,9 @@ function PageTrackerSimple() {
               <div style={{ fontWeight: 600, fontSize: 13, color: "var(--navy)", marginBottom: 4 }}>{l.descripcion}</div>
               <div className="req-meta">
                 {req?.solicitado_por && <span>{req.solicitado_por}</span>}
-                {req?.area && <><span>·</span><span>{req.area}{req.subarea ? ` › ${req.subarea}` : ""}</span></>}
-                {l.fecha_entrega_prom && <><span>·</span><span style={{ color: "var(--warn)" }}>Entrega est: {fmtDate(l.fecha_entrega_prom)}</span></>}
-                {l.fecha_entrega_real && <><span>·</span><span style={{ color: "var(--accent2)" }}>Entregado: {fmtDate(l.fecha_entrega_real)}</span></>}
+                {req?.area && <><span>·</span><span>{req.area}</span></>}
+                {l.fecha_entrega_prom && <><span>·</span><span style={{ color: "var(--warn)" }}>Est: {fmtDate(l.fecha_entrega_prom)}</span></>}
+                {entregado && l.fecha_entrega_real && <><span>·</span><span style={{ color: "var(--accent2)" }}>Entregado: {fmtDate(l.fecha_entrega_real)}</span></>}
                 {l.nro_remito && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)" }}>Remito: {l.nro_remito}</span></>}
               </div>
             </div>
@@ -1099,10 +1220,7 @@ function PageArchivo({ tipo }) {
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
         data.length === 0 ? <div className="empty-state">Sin rechazadas</div> :
         data.map(r => <div key={r.id} className="req-row">
-          <div className="flex-between mb8">
-            <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
-            <span style={{ fontSize: 10, color: "var(--muted)" }}>{fmtDate(r.updated_at)}</span>
-          </div>
+          <div className="flex-between mb8"><span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span><span style={{ fontSize: 10, color: "var(--muted)" }}>{fmtDate(r.updated_at)}</span></div>
           <div className="req-title">{r.titulo}</div>
           <div className="req-meta"><span>{r.base_buque}</span>{r.motivo_rechazo_categoria && <><span>·</span><span style={{ color: "var(--danger)" }}>{r.motivo_rechazo_categoria}</span></>}</div>
         </div>)
@@ -1128,17 +1246,17 @@ function PageArchivo({ tipo }) {
           </div>;
         })
       }
-      {selected && <TrackerLineaModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={() => { setSelected(null); load(); }} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={() => { setSelected(null); load(); }} onSolicitarConfirmacion={() => {}} />}
     </div>
   );
 }
 
-// ─── FORM: REQUISICIÓN ────────────────────────────────────────────────────────
+// ─── FORM: NUEVA REQUISICIÓN ──────────────────────────────────────────────────
 function ReqForm({ proveedores = [], onSave, onCancel }) {
   const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "" });
   const [form, setForm] = useState({
-    titulo: "", empresa: "Parana Logistica", base_buque: "", area: "", subarea: "",
-    detalle_tecnico: "", tipo_requisicion: "", urgencia: "Normal",
+    titulo: "", empresa: "Parana Logistica", base_buque: "", area: "Tecnica",
+    subarea: "", detalle_tecnico: "", tipo_requisicion: "", urgencia: "Normal",
     solicitado_por: "", fecha_necesaria: "", observaciones: "",
   });
   const [items, setItems] = useState([blank()]);
@@ -1146,12 +1264,11 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
   const bases = BASES_POR_EMPRESA["Parana Logistica"] || [];
-  const areas = AREAS_POR_EMPRESA["Parana Logistica"] || [];
   const subareas = SUBAREA_TECNICA["Parana Logistica"] || [];
   const detalles = DETALLE_TECNICO[form.subarea] || [];
 
   const handleSubmit = async () => {
-    if (!form.titulo || !form.base_buque || !form.area || !form.solicitado_por) return alert("Completá: Título, Base/Buque, Área, Solicitado por");
+    if (!form.titulo || !form.base_buque || !form.subarea || !form.solicitado_por) return alert("Completá: Título, Base/Buque, Sub-área, Solicitado por");
     if (!items.some(i => i.descripcion.trim())) return alert("Agregá al menos un ítem");
     setSaving(true);
     try {
@@ -1164,15 +1281,11 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
     <div>
       <div className="form-section">Datos</div>
       <div className="form-grid">
-        <FG label="Título *"><input value={form.titulo} onChange={e => set("titulo", e.target.value)} placeholder="Ej: Compra Bujías Motor Principal" /></FG>
+        <FG label="Título *"><input value={form.titulo} onChange={e => set("titulo", e.target.value)} placeholder="Ej: Cambio filtros motor principal" /></FG>
         <FG label="Tipo"><select value={form.tipo_requisicion} onChange={e => set("tipo_requisicion", e.target.value)}><option value="">Seleccionar...</option>{TIPOS_REQUISICION.map(t => <option key={t}>{t}</option>)}</select></FG>
       </div>
-      <div className="form-grid-3">
-        <FG label="Empresa"><input value="Parana Logistica" readOnly style={{ background: "var(--surface2)", color: "var(--muted)" }} /></FG>
-        <FG label="Base / Buque *"><select value={form.base_buque} onChange={e => set("base_buque", e.target.value)}><option value="">Seleccionar...</option>{bases.map(b => <option key={b}>{b}</option>)}</select></FG>
-        <FG label="Área *"><select value={form.area} onChange={e => { set("area", e.target.value); set("subarea", ""); }}><option value="">Seleccionar...</option>{areas.map(a => <option key={a}>{a}</option>)}</select></FG>
-      </div>
       <div className="form-grid">
+        <FG label="Base / Buque *"><select value={form.base_buque} onChange={e => set("base_buque", e.target.value)}><option value="">Seleccionar...</option>{bases.map(b => <option key={b}>{b}</option>)}</select></FG>
         <FG label="Sub-área *">
           <select value={form.subarea} onChange={e => { set("subarea", e.target.value); set("detalle_tecnico", ""); }}>
             <option value="">Seleccionar...</option>
@@ -1183,10 +1296,10 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
       </div>
       <div className="form-grid">
         <FG label="Solicitado por *"><input value={form.solicitado_por} onChange={e => set("solicitado_por", e.target.value)} /></FG>
+        <FG label="Urgencia *"><select value={form.urgencia} onChange={e => set("urgencia", e.target.value)}>{URGENCIA_OPTIONS.map(u => <option key={u}>{u}</option>)}</select></FG>
         <FG label="Fecha necesaria"><input type="date" value={form.fecha_necesaria} onChange={e => set("fecha_necesaria", e.target.value)} /></FG>
       </div>
-      <FG label="Urgencia *"><select value={form.urgencia} onChange={e => set("urgencia", e.target.value)}>{URGENCIA_OPTIONS.map(u => <option key={u}>{u}</option>)}</select></FG>
-      <FG label="Observaciones" full><textarea value={form.observaciones} onChange={e => set("observaciones", e.target.value)} style={{ marginTop: 8 }} /></FG>
+      <FG label="Observaciones"><textarea value={form.observaciones} onChange={e => set("observaciones", e.target.value)} /></FG>
 
       <div className="form-section mt16">Ítems</div>
       <div className="table-wrap">
@@ -1204,7 +1317,6 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
         </table>
       </div>
       <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
-
       <div className="flex-gap mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
         <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
         <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Crear Requisición"}</button>
@@ -1221,12 +1333,7 @@ function PageNueva({ onSaved, onCancel, notify }) {
     notify("Requisición creada — pendiente de aprobación", "success");
     onSaved();
   };
-  return (
-    <div className="card">
-      <div className="card-title">Nueva Requisición</div>
-      <ReqForm proveedores={proveedores} onSave={handleSave} onCancel={onCancel} />
-    </div>
-  );
+  return <div className="card"><div className="card-title">Nueva Requisición</div><ReqForm proveedores={proveedores} onSave={handleSave} onCancel={onCancel} /></div>;
 }
 
 // ─── PAGE: KPIs ──────────────────────────────────────────────────────────────
@@ -1285,8 +1392,7 @@ function PageProveedores({ notify }) {
   const handleSave = async () => {
     if (!form.nombre) return;
     const nuevo = await api.crearProveedor({ ...form, activo: true });
-    setProvs(p => [...p, nuevo]);
-    setModal(false);
+    setProvs(p => [...p, nuevo]); setModal(false);
     setForm({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" });
     notify("Proveedor agregado", "success");
   };
@@ -1308,7 +1414,7 @@ function PageProveedores({ notify }) {
           </div>
           <div className="card">
             <div className="card-title">Historial de compras</div>
-            {historial.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin compras registradas</div> :
+            {historial.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin compras</div> :
               <table>
                 <thead><tr><th>REQ</th><th>Descripción</th><th>OC</th><th>Precio</th><th>Entrega</th></tr></thead>
                 <tbody>
@@ -1331,13 +1437,7 @@ function PageProveedores({ notify }) {
             <table>
               <thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th></th></tr></thead>
               <tbody>
-                {provs.map(p => <tr key={p.id} className="click" onClick={() => handleSelect(p)}>
-                  <td style={{ fontWeight: 600 }}>{p.nombre}</td>
-                  <td className="text-muted">{p.rubro || "—"}</td>
-                  <td>{p.contacto || "—"}</td>
-                  <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
-                  <td><span style={{ fontSize: 11, color: "var(--blue)" }}>Ver →</span></td>
-                </tr>)}
+                {provs.map(p => <tr key={p.id} className="click" onClick={() => handleSelect(p)}><td style={{ fontWeight: 600 }}>{p.nombre}</td><td className="text-muted">{p.rubro || "—"}</td><td>{p.contacto || "—"}</td><td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td><td><span style={{ fontSize: 11, color: "var(--blue)" }}>Ver →</span></td></tr>)}
                 {!provs.length && <tr><td colSpan={5}><div className="empty-state">Sin proveedores</div></td></tr>}
               </tbody>
             </table>
@@ -1345,7 +1445,7 @@ function PageProveedores({ notify }) {
         </div>
       )}
       {modal && <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
-        <div className="modal" style={{ maxWidth: 560 }}>
+        <div className="modal" style={{ maxWidth: 520 }}>
           <div className="mhdr"><div className="mtitle">Nuevo Proveedor</div><button className="mclose" onClick={() => setModal(false)}>✕</button></div>
           <div className="mbody">
             <div className="form-grid">
@@ -1358,10 +1458,7 @@ function PageProveedores({ notify }) {
             <FG label="Palabras clave" hint="Separadas por coma"><input value={form.palabras_clave} onChange={e => setForm(f => ({ ...f, palabras_clave: e.target.value }))} /></FG>
             <FG label="Notas"><textarea value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} /></FG>
           </div>
-          <div className="mftr">
-            <button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleSave}>Guardar</button>
-          </div>
+          <div className="mftr"><button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button><button className="btn btn-primary" onClick={handleSave}>Guardar</button></div>
         </div>
       </div>}
     </div>
@@ -1382,13 +1479,13 @@ export default function App() {
   const loadCounts = useCallback(async () => {
     try {
       const [reqs, tracker] = await Promise.all([
-        api.getRequisiciones({ empresa: "Parana Logistica", statuses: ["pendiente_aprobacion", "aprobado_cotizar", "pendiente_confirmacion"] }),
-        api.getTrackerLineas({ statuses: ["en_cotizacion", "oc_emitida", "en_transito"] })
+        api.getRequisiciones({ empresa: "Parana Logistica", statuses: ["pendiente_aprobacion"] }),
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito"] })
       ]);
       setCounts({
-        aprobacion: reqs.filter(r => r.status === "pendiente_aprobacion").length,
-        cotizar: reqs.filter(r => r.status === "aprobado_cotizar").length,
-        confirmacion: reqs.filter(r => r.status === "pendiente_confirmacion").length,
+        aprobacion: reqs.length,
+        cotizar: tracker.filter(l => l.status === "en_cotizacion").length,
+        confirmacion: tracker.filter(l => l.status === "pendiente_confirmacion").length,
         tracker: tracker.length,
       });
     } catch (e) { console.error(e); }
@@ -1398,8 +1495,8 @@ export default function App() {
 
   const pageTitles = {
     "inbox-aprobacion": "PENDIENTES DE APROBACIÓN",
-    "inbox-cotizar": "APROBADOS PARA COTIZAR",
-    "inbox-confirmacion": "PENDIENTES CONFIRMACIÓN DE VALOR",
+    "para-cotizar": "PARA COTIZAR",
+    "confirmacion": "CONFIRMACIÓN DE VALOR",
     "tracker": "TRACKER — COMPRAS EN CURSO",
     "tracker-simple": "SEGUIMIENTO DE PEDIDOS",
     "archivo-entregados": "ARCHIVO — ENTREGADOS",
@@ -1416,6 +1513,8 @@ export default function App() {
       {badge > 0 && <span className={`ni-badge ${badgeColor || ""}`}>{badge}</span>}
     </div>
   );
+
+  const refresh = () => { setRefreshKey(k => k + 1); loadCounts(); };
 
   return (
     <>
@@ -1434,8 +1533,8 @@ export default function App() {
 
           <div className="nav-section">Inbox</div>
           <NI id="inbox-aprobacion" icon="⏳" label="Pend. aprobación" badge={counts.aprobacion} />
-          <NI id="inbox-cotizar" icon="📥" label="Para cotizar" badge={counts.cotizar} badgeColor="amber" />
-          <NI id="inbox-confirmacion" icon="🔁" label="Conf. de valor" badge={counts.confirmacion} badgeColor="amber" />
+          <NI id="para-cotizar" icon="📥" label="Para cotizar" badge={counts.cotizar} badgeColor="amber" />
+          <NI id="confirmacion" icon="🔁" label="Conf. de valor" badge={counts.confirmacion} badgeColor="amber" />
 
           <div className="nav-section">Tracker</div>
           <NI id="tracker" icon="📊" label="Compras en curso" badge={counts.tracker} badgeColor="gray" />
@@ -1456,7 +1555,7 @@ export default function App() {
               <span className="ni-icon">←</span>
               <span>Volver al portal</span>
             </div>
-            <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", fontFamily: "var(--mono)", letterSpacing: 1, marginTop: 8 }}>COMPRAS TÉCNICAS v3.1</div>
+            <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", fontFamily: "var(--mono)", letterSpacing: 1, marginTop: 8 }}>COMPRAS TÉCNICAS v4.0</div>
           </div>
         </nav>
 
@@ -1469,10 +1568,10 @@ export default function App() {
             </div>
           </div>
           <div className="content">
-            {page === "inbox-aprobacion" && <PageInbox statuses={["pendiente_aprobacion"]} titulo="Pendientes de aprobación" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
-            {page === "inbox-cotizar" && <PageInbox statuses={["aprobado_cotizar"]} titulo="Aprobados para cotizar" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
-            {page === "inbox-confirmacion" && <PageInbox statuses={["pendiente_confirmacion"]} titulo="Pendientes confirmación de valor" notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
-            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={() => { setRefreshKey(k => k + 1); loadCounts(); }} />}
+            {page === "inbox-aprobacion" && <PageInboxAprobacion notify={notify} onNeedRefresh={refresh} />}
+            {page === "para-cotizar" && <PageParaCotizar notify={notify} onNeedRefresh={refresh} />}
+            {page === "confirmacion" && <PageConfirmacion notify={notify} onNeedRefresh={refresh} />}
+            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={refresh} />}
             {page === "tracker-simple" && <PageTrackerSimple />}
             {page === "archivo-entregados" && <PageArchivo tipo="entregados" />}
             {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
