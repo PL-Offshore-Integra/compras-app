@@ -373,7 +373,7 @@ function AprobarCondicionalModal({ req, onClose, onSave }) {
     const itemsValidos = items.filter(it => it.descripcion?.trim());
     setSaving(true);
     try {
-      await api.actualizarItems(req.id, itemsValidos.map(({ id: _id, requisicion_id: _rid, ...rest }) => rest));
+      await api.actualizarItems(req.id, itemsValidos.map(({ id: _id, requisicion_id: _rid, nro_linea: _nl, ...rest }) => rest));
       const grupos = [...new Set(asignaciones.slice(0, itemsValidos.length))].sort();
       const lineas = grupos.map(g => ({
         grupo: g,
@@ -601,8 +601,8 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     if (!form.costo_real) return alert("Ingresá el valor cotizado antes de solicitar confirmación");
     setSaving(true);
     try {
-      await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "en_cotizacion" }));
-      onSolicitarConfirmacion({ ...linea, ...buildPayload() });
+      await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "pendiente_confirmacion" }));
+      onSolicitarConfirmacion({ ...linea, ...buildPayload({ status: "pendiente_confirmacion" }) });
     } catch (e) { alert("Error."); }
     finally { setSaving(false); }
   };
@@ -867,7 +867,7 @@ function PageParaCotizar({ notify, onNeedRefresh }) {
 
   const handleSolicitarConfirmacion = async (linea) => {
     setSelected(null);
-    await api.actualizarTrackerLinea(linea.id, { ...linea, status: "pendiente_confirmacion" });
+    await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" });
     notify("Solicitud de confirmación de valor enviada al aprobador", "info");
     load(); onNeedRefresh();
   };
@@ -1128,7 +1128,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           </div>
         </div>
       }
-      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { ...linea, status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} />}
     </div>
   );
 }
@@ -1340,7 +1340,7 @@ function PageNueva({ onSaved, onCancel, notify }) {
 function PageKPIs() {
   const [reqs, setReqs] = useState([]);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { api.getRequisiciones().then(d => { setReqs(d); setLoading(false); }); }, []);
+  useEffect(() => { api.getRequisiciones({ empresa: "Parana Logistica" }).then(d => { setReqs(d); setLoading(false); }); }, []);
   if (loading) return <div className="loading"><span className="spin">◌</span></div>;
   const total = reqs.length;
   const urgentes = reqs.filter(r => r.urgencia === "Critica").length;
