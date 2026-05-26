@@ -234,6 +234,75 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tracker-simple-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:8px}
 .tracker-simple-row.en-curso{border-left:4px solid var(--warn)}
 .tracker-simple-row.entregado{border-left:4px solid var(--accent2)}
+
+/* ── RESPONSIVE MOBILE ── */
+@media (max-width: 768px) {
+  .app { flex-direction: column; }
+  .sidebar { display: none; }
+  .main { width: 100%; padding-bottom: 72px; }
+  .topbar { padding: 10px 16px; }
+  .topbar-title { font-size: 11px; }
+  .content { padding: 14px 14px; }
+  .card { padding: 14px; margin-bottom: 12px; }
+  .stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { padding: 12px; }
+  .stat-value { font-size: 22px; }
+  .form-grid { grid-template-columns: 1fr; gap: 10px; }
+  .form-grid-3 { grid-template-columns: 1fr; gap: 10px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { font-size: 11px; min-width: 540px; }
+  th, td { padding: 7px 8px; }
+  .tracker-table th, .tracker-table td { padding: 7px 8px; }
+  .filter-row { flex-direction: column; align-items: stretch; }
+  .filter-input, .filter-select { min-width: unset; width: 100%; }
+  .btn { font-size: 11px; padding: 8px 12px; }
+  .mftr { flex-wrap: wrap; gap: 8px; }
+  .mftr .btn { flex: 1; justify-content: center; }
+  .overlay { padding: 0; align-items: flex-end; }
+  .modal { border-radius: 16px 16px 0 0; max-width: 100%; max-height: 92vh; overflow-y: auto; }
+  .modal-lg { max-width: 100%; }
+  .req-meta { gap: 8px; }
+  .req-title { font-size: 13px; }
+  .tabs-row { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tab { font-size: 10px; padding: 8px 10px; }
+  .notif { bottom: 80px; right: 10px; left: 10px; max-width: unset; }
+  .items-edit { font-size: 11px; }
+  .items-edit th, .items-edit td { padding: 4px 6px; }
+}
+
+/* ── BOTTOM NAV (solo mobile) ── */
+@media (max-width: 768px) {
+  .mobile-nav {
+    display: flex !important;
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--navy); border-top: 1px solid rgba(255,255,255,0.1);
+    z-index: 50; height: 64px;
+    justify-content: space-around; align-items: center;
+    padding: 0 4px; box-shadow: 0 -2px 12px rgba(33,51,99,0.2);
+    overflow-x: auto;
+  }
+  .mobile-nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    cursor: pointer; padding: 6px 8px; border-radius: 8px;
+    color: rgba(255,255,255,0.5); transition: all .15s; flex: 1;
+    position: relative; min-width: 48px;
+  }
+  .mobile-nav-item.active { color: #fff; background: rgba(255,255,255,0.1); }
+  .mobile-nav-item:hover { color: #fff; }
+  .mobile-nav-icon { font-size: 16px; line-height: 1; }
+  .mobile-nav-label { font-size: 8px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; font-family: var(--mono); text-align: center; }
+  .mobile-nav-badge {
+    position: absolute; top: 3px; right: 6px;
+    background: var(--danger); color: #fff;
+    font-family: var(--mono); font-size: 8px; font-weight: 700;
+    padding: 1px 4px; border-radius: 8px; min-width: 14px; text-align: center;
+  }
+  .mobile-nav-badge.amber { background: var(--warn); }
+  .mobile-nav-badge.gray { background: rgba(255,255,255,0.3); }
+}
+@media (min-width: 769px) {
+  .mobile-nav { display: none !important; }
+}
 `;
 
 function Notif({ msg, onClose }) {
@@ -1673,11 +1742,35 @@ function ComprasApp() {
         </div>
       </div>
       <Notif msg={notif} onClose={() => setNotif(null)} />
+      {/* Bottom nav — solo visible en mobile */}
+      <nav className="mobile-nav">
+        <div className={`mobile-nav-item ${page === "inbox-aprobacion" ? "active" : ""}`} onClick={() => setPage("inbox-aprobacion")}>
+          <span className="mobile-nav-icon">⏳</span>
+          <span className="mobile-nav-label">Aprobac.</span>
+          {counts.aprobacion > 0 && <span className="mobile-nav-badge">{counts.aprobacion}</span>}
+        </div>
+        <div className={`mobile-nav-item ${page === "para-cotizar" ? "active" : ""}`} onClick={() => setPage("para-cotizar")}>
+          <span className="mobile-nav-icon">📥</span>
+          <span className="mobile-nav-label">Cotizar</span>
+          {counts.cotizar > 0 && <span className="mobile-nav-badge amber">{counts.cotizar}</span>}
+        </div>
+        <div className={`mobile-nav-item ${page === "tracker" ? "active" : ""}`} onClick={() => setPage("tracker")}>
+          <span className="mobile-nav-icon">📊</span>
+          <span className="mobile-nav-label">Tracker</span>
+          {counts.tracker > 0 && <span className="mobile-nav-badge gray">{counts.tracker}</span>}
+        </div>
+        <div className={`mobile-nav-item ${page === "nueva" ? "active" : ""}`} onClick={() => setPage("nueva")}>
+          <span className="mobile-nav-icon">✚</span>
+          <span className="mobile-nav-label">Nueva</span>
+        </div>
+        <div className={`mobile-nav-item ${page === "proveedores" ? "active" : ""}`} onClick={() => setPage("proveedores")}>
+          <span className="mobile-nav-icon">🏭</span>
+          <span className="mobile-nav-label">Proveed.</span>
+        </div>
+      </nav>
     </>
   );
 }
-
-export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
