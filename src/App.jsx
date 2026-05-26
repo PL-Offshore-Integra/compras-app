@@ -1771,6 +1771,8 @@ function ComprasApp() {
     </>
   );
 }
+
+export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
