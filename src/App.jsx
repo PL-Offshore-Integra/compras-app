@@ -1613,7 +1613,7 @@ function LoginPage() {
             </div>
             <div className="login-left-divider" />
             <div className="login-left-company">
-              <img src="/Logo-PL.png" alt="Parana Logística" className="login-left-company-logo" />
+              <img src="/PL.png" alt="Parana Logística" className="login-left-company-logo" />
               <div className="login-left-company-name">Parana Logística</div>
             </div>
             <div className="login-left-line" />
