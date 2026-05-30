@@ -1570,6 +1570,7 @@ function LoginPage() {
     .login-sub{font-size:13px;color:rgba(255,255,255,0.4);line-height:1.7;max-width:300px;font-style:italic}
     .login-right{width:420px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:60px 48px}
     .login-card{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(35,92,150,0.25);border-radius:16px;padding:36px;backdrop-filter:blur(20px)}
+    .login-card-eyebrow{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:#7EB8E8;text-transform:uppercase;margin-bottom:10px}
     .login-card-title{font-size:15px;font-weight:700;color:#fff;margin-bottom:4px}
     .login-card-sub{font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:1px;margin-bottom:24px;text-transform:uppercase}
     .login-fg{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
@@ -1602,6 +1603,7 @@ function LoginPage() {
           </div>
           <div className="login-right">
             <div className="login-card">
+              <div className="login-card-eyebrow">Parana Logística | Compras Técnicas</div>
               <div className="login-card-title">Acceso al sistema</div>
               <div className="login-card-sub">Solo personal autorizado</div>
               {error && <div className="login-err">{error}</div>}
