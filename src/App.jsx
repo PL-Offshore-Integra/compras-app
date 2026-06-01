@@ -14,7 +14,7 @@ const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
 const TRACKER_STATUS = {
   en_cotizacion: { label: "En cotización", color: "b-amber" },
   oc_emitida:    { label: "OC Emitida",    color: "b-blue" },
-  en_transito:   { label: "En tránsito",   color: "b-blue" },
+  en_transito:   { label: "En tránsito",   color: "b-purple" },
   entregado:     { label: "Entregado",     color: "b-green" },
   archivado:     { label: "Archivado",     color: "b-gray" },
 };
@@ -98,15 +98,15 @@ const CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --navy:#213363;--blue:#235C96;--mid:#6381A7;--light:#A5B5CC;
-  --bg:#F0F4F8;--surface:#FFF;--surface2:#F5F7FA;
-  --border:#D6E0ED;
+  --bg:#F0F4F8;--surface:#FFF;--surface2:#F5F7FA;--surface3:#EAF0F6;
+  --border:#D6E0ED;--border2:#B0C4D8;
   --text:#213363;--muted:#6381A7;--muted2:#8FA3BC;
-  --accent:#235C96;--accent2:#1E7A4A;--warn:#B07D0A;--danger:#C0392B;
-  --teal:#1A7A6E;
+  --accent:#235C96;--accent2:#1E7E4A;--warn:#B07D0A;--danger:#C0392B;
+  --purple:#6B4FA0;--teal:#1A7A6E;--orange:#C05621;
   --mono:'DM Mono',monospace;--sans:'Montserrat',sans-serif;--r:6px;--r2:10px;
 }
-body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100vh}
-.app{display:flex;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100vh;overflow-x:hidden}
+.app{display:flex;min-height:100vh;overflow-x:hidden}
 .sidebar{width:235px;min-width:235px;background:var(--navy);display:flex;flex-direction:column;box-shadow:2px 0 8px rgba(33,51,99,.15)}
 .sidebar-header{border-bottom:1px solid rgba(255,255,255,.1)}
 .sidebar-logo-wrap{padding:20px 18px 16px;display:flex;align-items:center;gap:12px}
@@ -127,24 +127,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:13px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(33,51,99,.06)}
 .topbar-title{font-size:12px;font-weight:600;letter-spacing:1px;color:var(--navy);text-transform:uppercase}
-.content{flex:1;overflow-y:auto;padding:24px 28px;background:var(--bg)}
+.content{flex:1;overflow-y:auto;overflow-x:hidden;padding:24px 28px;background:var(--bg)}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(33,51,99,.06)}
 .card-title{font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 18px;box-shadow:0 1px 4px rgba(33,51,99,.06)}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px}
 .stat-label{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;margin-bottom:6px;text-transform:uppercase}
-.stat-value{font-family:var(--mono);font-size:28px;font-weight:700}
-.va{color:var(--blue)}.vg{color:var(--accent2)}.vr{color:var(--danger)}.vp{color:#4C1D95}.vm{color:var(--warn)}.vgr{color:var(--muted)}
+.stat-value{font-family:var(--mono);font-size:28px;font-weight:600}
+.va{color:var(--blue)}.vg{color:var(--accent2)}.vr{color:var(--danger)}.vp{color:var(--purple)}.vm{color:var(--warn)}.vgr{color:var(--muted)}
 .table-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:9px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2)}
-td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:last-child td{border-bottom:none}
-tr.click:hover td{background:var(--surface2);cursor:pointer}
-.tracker-table th{font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:9px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2);position:sticky;top:0;z-index:2}
+tr.click:hover td{background:var(--surface3);cursor:pointer}
+.tracker-table th{font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface2);position:sticky;top:0;z-index:2}
 .tracker-table th.sortable{cursor:pointer;user-select:none}.tracker-table th.sortable:hover{color:var(--navy)}
-.tracker-table td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
-.tracker-table tr:hover td{background:var(--surface2);cursor:pointer}
+.tracker-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tracker-table tr:hover td{background:var(--surface3);cursor:pointer}
 .tracker-table tr:last-child td{border-bottom:none}
 .filter-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
 .filter-input{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-family:var(--sans);font-size:11px;padding:6px 10px;outline:none;min-width:130px}
@@ -152,11 +152,12 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
 .badge{display:inline-flex;align-items:center;font-family:var(--mono);font-size:9px;font-weight:600;padding:3px 8px;border-radius:4px;white-space:nowrap;letter-spacing:.3px}
 .b-amber{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
 .b-blue{background:#DBEAFE;color:#1E40AF;border:1px solid #BFDBFE}
-.b-green{background:#D1FAE5;color:#065F46;border:1px solid #A7F3D0}
+.b-teal{background:#D1FAE5;color:#065F46;border:1px solid #A7F3D0}
 .b-red{background:#FEE2E2;color:#991B1B;border:1px solid #FECACA}
-.b-gray{background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB}
 .b-purple{background:#EDE9FE;color:#4C1D95;border:1px solid #DDD6FE}
 .b-orange{background:#FFEDD5;color:#9A3412;border:1px solid #FED7AA}
+.b-green{background:#D1FAE5;color:#065F46;border:1px solid #A7F3D0}
+.b-gray{background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB}
 .urgdot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;flex-shrink:0}
 .btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.3px;padding:7px 14px;border-radius:var(--r);border:1px solid transparent;cursor:pointer;transition:all .15s;white-space:nowrap;text-transform:uppercase}
 .btn-primary{background:var(--blue);color:#fff}.btn-primary:hover{background:var(--navy)}
@@ -164,8 +165,8 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
 .btn-danger{background:transparent;color:var(--danger);border-color:var(--danger)}.btn-danger:hover{background:#FEE2E2}
 .btn-ghost{background:transparent;color:var(--muted);border-color:var(--border)}.btn-ghost:hover{color:var(--text);background:var(--surface2)}
 .btn-warn{background:transparent;color:var(--warn);border-color:#FDE68A}.btn-warn:hover{background:#FEF3C7}
-.btn-cond{background:transparent;color:#4C1D95;border-color:#DDD6FE}.btn-cond:hover{background:#EDE9FE}
-.btn-confirm{background:transparent;color:#9A3412;border-color:#FED7AA}.btn-confirm:hover{background:#FFEDD5}
+.btn-cond{background:transparent;color:var(--purple);border-color:#DDD6FE}.btn-cond:hover{background:#EDE9FE}
+.btn-confirm{background:transparent;color:var(--orange);border-color:#FED7AA}.btn-confirm:hover{background:#FFEDD5}
 .btn-sm{padding:4px 10px;font-size:10px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .overlay{position:fixed;inset:0;background:rgba(33,51,99,.5);display:flex;align-items:flex-start;justify-content:center;z-index:100;padding:20px;overflow-y:auto;animation:fadeIn .15s}
@@ -200,11 +201,11 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
 .tl-dot.r{border-color:var(--danger);color:var(--danger);background:#FEE2E2}
 .tl-dot.u{border-color:var(--warn);color:var(--warn);background:#FEF3C7}
 .tl-ev{font-size:13px;font-weight:600;color:var(--navy)}.tl-meta{font-size:11px;color:var(--muted);margin-top:2px}
-.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(33,51,99,.05)}
+.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px;cursor:pointer;transition:all .15s}
 .req-row:hover{border-color:var(--blue);box-shadow:0 2px 8px rgba(35,92,150,.12)}
 .req-row.unread{border-left:4px solid var(--blue)}
 .req-row.devuelto{border-left:4px solid var(--warn)}
-.req-row.pend-confirm{border-left:4px solid var(--warn)}
+.req-row.pend-confirm{border-left:4px solid var(--orange)}
 .req-title{font-weight:600;font-size:14px;margin-bottom:6px;color:var(--navy)}
 .req-meta{display:flex;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap;align-items:center}
 .notif{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-left-width:3px;border-radius:var(--r2);padding:12px 16px;font-size:13px;animation:slideUp .2s;z-index:300;max-width:340px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(33,51,99,.15)}
@@ -213,8 +214,8 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
 .info-box.accent{border-left:3px solid var(--blue)}
 .info-box.warn{border-left:3px solid var(--warn);background:#FFFBEB}
 .info-box.danger{border-left:3px solid var(--danger);background:#FEF2F2}
-.info-box.orange{border-left:3px solid var(--warn);background:#FFFBEB}
-.flex-gap{display:flex;gap:8px;align-items:center}.flex-between{display:flex;justify-content:space-between;align-items:center}
+.info-box.orange{border-left:3px solid var(--orange);background:#FFF7ED}
+.flex-gap{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.flex-between{display:flex;justify-content:space-between;align-items:center}
 .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
 .mb8{margin-bottom:8px}.mb12{margin-bottom:12px}.mb16{margin-bottom:16px}
 .text-mono{font-family:var(--mono)}.text-muted{color:var(--muted)}
@@ -229,10 +230,13 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
 .grupo-chip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;font-family:var(--mono);font-size:12px;font-weight:700;background:#DBEAFE;color:var(--blue);border:1px solid #BFDBFE;flex-shrink:0}
 .tag{display:inline-block;font-family:var(--mono);font-size:9px;padding:2px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--muted)}
 .fecha-chip{display:inline-flex;flex-direction:column;gap:1px;font-family:var(--mono);font-size:9px;color:var(--muted);white-space:nowrap}
-.fecha-chip span:first-child{font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:.5px}
+.fecha-chip span:first-child{font-size:8px;color:var(--muted2);text-transform:uppercase;letter-spacing:.5px}
 .tracker-simple-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:8px}
 .tracker-simple-row.en-curso{border-left:4px solid var(--warn)}
 .tracker-simple-row.entregado{border-left:4px solid var(--accent2)}
+/* ── ACTION CARDS ── */
+.req-row-actions{display:flex;flex-direction:row;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);justify-content:flex-end}
+.cotiz-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
 
 /* ── RESPONSIVE MOBILE ── */
 @media (max-width: 768px) {
@@ -267,6 +271,35 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
   .notif { bottom: 80px; right: 10px; left: 10px; max-width: unset; }
   .items-edit { font-size: 11px; }
   .items-edit th, .items-edit td { padding: 4px 6px; }
+  .items-edit table { min-width: 380px; }
+
+  /* ── ACTION CARDS: req-row toolbar en mobile ── */
+  .req-row-actions{display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);width:100%}
+  .req-row-actions .btn{width:100%;justify-content:center;padding:9px 12px;font-size:12px}
+
+  /* ── MODAL FOOTER: columna full-width en mobile ── */
+  .mftr{flex-direction:column;align-items:stretch;gap:6px}
+  .mftr .btn{width:100%;justify-content:center;flex:unset}
+  .mftr .btn-success{order:-3}.mftr .btn-primary{order:-2}.mftr .btn-danger{order:-1}
+
+  /* ── CARD-TITLE con botón inline → columna ── */
+  .card-title{flex-direction:column;align-items:flex-start;gap:8px}
+  .card-title .btn{width:100%;justify-content:center}
+
+  /* ── FILTER ROW botones: full width ── */
+  .filter-row .btn{width:100%;justify-content:center}
+
+  /* ── FORM FOOTER: columna ── */
+  .form-footer-actions{flex-direction:column !important;align-items:stretch !important}
+  .form-footer-actions .btn{width:100%;justify-content:center}
+
+  /* ── COTIZACIONES GRID: 1 col ── */
+  .cotiz-grid{grid-template-columns:1fr !important}
+
+  /* ── FLEX-BETWEEN con acciones: info arriba, acciones abajo ── */
+  .req-row .flex-between{flex-direction:column;align-items:flex-start;gap:8px}
+  .req-row .flex-between > .flex-gap:last-child{width:100%;flex-direction:column;gap:6px}
+  .req-row .flex-between > .flex-gap:last-child .btn{width:100%;justify-content:center}
 }
 
 /* ── BOTTOM NAV (solo mobile) ── */
@@ -277,23 +310,24 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
     background: var(--navy); border-top: 1px solid rgba(255,255,255,0.1);
     z-index: 50; height: 64px;
     justify-content: space-around; align-items: center;
-    padding: 0 8px; box-shadow: 0 -2px 12px rgba(33,51,99,0.2);
+    padding: 0 4px; box-shadow: 0 -2px 12px rgba(33,51,99,0.2);
+    overflow-x: auto;
   }
   .mobile-nav-item {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    cursor: pointer; padding: 6px 10px; border-radius: 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    cursor: pointer; padding: 6px 8px; border-radius: 8px;
     color: rgba(255,255,255,0.5); transition: all .15s; flex: 1;
-    position: relative;
+    position: relative; min-width: 48px;
   }
   .mobile-nav-item.active { color: #fff; background: rgba(255,255,255,0.1); }
   .mobile-nav-item:hover { color: #fff; }
-  .mobile-nav-icon { font-size: 18px; line-height: 1; }
-  .mobile-nav-label { font-size: 9px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; font-family: var(--mono); text-align: center; }
+  .mobile-nav-icon { font-size: 16px; line-height: 1; }
+  .mobile-nav-label { font-size: 8px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; font-family: var(--mono); text-align: center; }
   .mobile-nav-badge {
-    position: absolute; top: 4px; right: 8px;
+    position: absolute; top: 3px; right: 6px;
     background: var(--danger); color: #fff;
     font-family: var(--mono); font-size: 8px; font-weight: 700;
-    padding: 1px 5px; border-radius: 8px; min-width: 16px; text-align: center;
+    padding: 1px 4px; border-radius: 8px; min-width: 14px; text-align: center;
   }
   .mobile-nav-badge.amber { background: var(--warn); }
   .mobile-nav-badge.gray { background: rgba(255,255,255,0.3); }
@@ -322,7 +356,7 @@ function TrackerBadge({ status }) {
 function StatusBadge({ status }) {
   const colorMap = {
     pendiente_aprobacion: "b-amber", aprobado_cotizar: "b-blue",
-    en_cotizacion: "b-amber", pendiente_confirmacion: "b-orange",
+    en_cotizacion: "b-teal", pendiente_confirmacion: "b-orange",
     aprobado: "b-green", rechazado: "b-red", en_compra: "b-purple",
     entregado: "b-green", cerrado: "b-gray",
   };
@@ -720,7 +754,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
           </div>}
 
           <div className="form-section">Cotizaciones</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div className="cotiz-grid">
             {cotiz.map((c, i) => (
               <div key={i} style={{ borderRadius: "var(--r2)", padding: "12px 14px", ...COTIZ_STYLES[i] }}>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && "⭐ "}{["Cotización elegida", "Cotización 2", "Cotización 3"][i]}</div>
@@ -772,9 +806,9 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
-          <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
           <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>💾 Guardar</button>
+          <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
+          <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
           <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "🛒 Comprar"}</button>
         </div>
       </div>
@@ -867,25 +901,19 @@ function PageInboxAprobacion({ notify, onNeedRefresh }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>⏳ Pendientes de aprobación</div>
-        <span className="badge b-red">{reqs.length}</span>
+        <span className="ni-badge" style={{ position: "static" }}>{reqs.length}</span>
       </div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
         reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin requisiciones pendientes</div> :
         reqs.map(r => (
           <div key={r.id} className={`req-row ${r.veces_devuelto > 0 ? "devuelto" : "unread"}`}>
-            <div className="flex-between mb8">
-              <div className="flex-gap" onClick={() => setSelected(r)} style={{ flex: 1, cursor: "pointer" }}>
-                <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
-                <UrgBadge urgencia={r.urgencia} />
-                {r.veces_devuelto > 0 && <span className="badge b-orange">↩ {r.veces_devuelto}x</span>}
-              </div>
-              <div className="flex-gap">
-                <button className="btn btn-danger btn-sm" onClick={() => setRechazando(r)}>Rechazar</button>
-                <button className="btn btn-cond btn-sm" onClick={() => setAprobandoCond(r)}>Aprob. condicional</button>
-                <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>✓ Aprobar →</button>
-              </div>
+            {/* INFO: siempre visible primero */}
+            <div className="flex-gap mb8" onClick={() => setSelected(r)} style={{ cursor: "pointer", flexWrap: "wrap" }}>
+              <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
+              <UrgBadge urgencia={r.urgencia} />
+              {r.veces_devuelto > 0 && <span className="badge b-orange">↩ {r.veces_devuelto}x</span>}
             </div>
             <div className="req-title" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>{r.titulo}</div>
             <div className="req-meta" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
@@ -893,6 +921,12 @@ function PageInboxAprobacion({ notify, onNeedRefresh }) {
               <span>{r.area}{r.subarea ? ` › ${r.subarea}` : ""}</span><span>·</span>
               <span>{r.solicitado_por}</span>
               {r.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Nec: {fmtDate(r.fecha_necesaria)}</span></>}
+            </div>
+            {/* ACCIONES: debajo del contenido, full-width en mobile */}
+            <div className="req-row-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>✓ Aprobar →</button>
+              <button className="btn btn-cond btn-sm" onClick={() => setAprobandoCond(r)}>Aprob. condicional</button>
+              <button className="btn btn-danger btn-sm" onClick={() => setRechazando(r)}>Rechazar</button>
             </div>
           </div>
         ))
@@ -941,10 +975,10 @@ function PageParaCotizar({ notify, onNeedRefresh }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>📥 Para cotizar</div>
-        <span className="badge b-amber">{lineas.filter(l => l.status === "en_cotizacion").length}</span>
-        {lineas.filter(l => l.status === "pendiente_confirmacion").length > 0 && <span className="badge b-orange">{lineas.filter(l => l.status === "pendiente_confirmacion").length} conf. pendiente</span>}
+        <span className="ni-badge" style={{ position: "static", background: "var(--warn)" }}>{lineas.filter(l => l.status === "en_cotizacion").length}</span>
+        {lineas.filter(l => l.status === "pendiente_confirmacion").length > 0 && <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.filter(l => l.status === "pendiente_confirmacion").length} conf. pendiente</span>}
       </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
@@ -968,7 +1002,7 @@ function PageParaCotizar({ notify, onNeedRefresh }) {
                 {l.proveedor_elegido && <><span>·</span><span>{l.proveedor_elegido}</span></>}
                 {l.costo_real && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)" }}>{fmt(l.costo_real, l.moneda_real)}</span></>}
                 {req?.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Nec: {fmtDate(req.fecha_necesaria)}</span></>}
-                {esPendConf && <span style={{ color: "var(--warn)", fontWeight: 600 }}>· Esperando conf. de valor</span>}
+                {esPendConf && <span style={{ color: "var(--orange)", fontWeight: 600 }}>· Esperando conf. de valor</span>}
               </div>
             </div>
           );
@@ -1000,9 +1034,9 @@ function PageConfirmacion({ notify, onNeedRefresh }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>🔁 Confirmación de valor</div>
-        <span className="badge b-orange">{lineas.length}</span>
+        <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.length}</span>
       </div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
         lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>Sin confirmaciones pendientes</div> :
@@ -1137,8 +1171,10 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           {proveedoresDisponibles.map(p => <option key={p}>{p}</option>)}
         </select>
         {(filtros.status || filtros.proveedor || filtros.busqueda) && <button className="btn btn-ghost btn-sm" onClick={() => setFiltros({ status: "", proveedor: "", busqueda: "" })}>✕ Limpiar</button>}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{lineasFiltradas.length} de {lineas.length}</span>
-        <button className="btn btn-ghost btn-sm" onClick={handleExport}>↓ Excel</button>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{lineasFiltradas.length} / {lineas.length}</span>
+          <button className="btn btn-ghost btn-sm" onClick={handleExport}>↓ Excel</button>
+        </div>
       </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
@@ -1384,7 +1420,7 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
         </table>
       </div>
       <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
-      <div className="flex-gap mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+      <div className="flex-gap form-footer-actions mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
         <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
         <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Crear Requisición"}</button>
       </div>
