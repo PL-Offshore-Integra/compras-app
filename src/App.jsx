@@ -7,7 +7,8 @@ import {
 } from "./lib/catalogos";
 import { supabase } from "./lib/supabase";
 
-const USUARIO = "Comprador";
+const USUARIO = "Comprador"; // fallback — se sobreescribe con email real del session
+const getUsuario = (session) => session?.user?.email || USUARIO;
 const PORTAL_URL = "https://erp-portal-fawn.vercel.app"; // TODO: migrar a integra.terra-mare.com.ar/parana
 const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
 
@@ -639,7 +640,7 @@ function ReqDetalleModal({ req, onClose }) {
 }
 
 // ─── MODAL: COTIZAR Y COMPRAR (comprador) ─────────────────────────────────────
-function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirmacion }) {
+function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirmacion, usuarioEmail }) {
   const emptyCotiz = () => ({ proveedor: "", precio: "", moneda: "ARS", plazo: "" });
   const initCotiz = () => { const c = linea.cotizaciones || {}; return [c.c1 || emptyCotiz(), c.c2 || emptyCotiz(), c.c3 || emptyCotiz()]; };
   const [form, setForm] = useState({
@@ -652,10 +653,17 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     nota_confirmacion: linea.nota_confirmacion || "",
   });
   const [cotiz, setCotiz] = useState(initCotiz());
+  const blankItem = () => ({ descripcion: "", cantidad: 1, unidad: "Uni" });
+  const [itemsEdit, setItemsEdit] = useState(
+    (linea.items_detalle || []).length > 0
+      ? linea.items_detalle.map(it => ({ ...it }))
+      : []
+  );
   const [adjuntos, setAdjuntos] = useState(linea.cotizaciones?.adjuntos || []);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
+  const [showLog, setShowLog] = useState(true);
   const fileRef = useRef();
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -670,6 +678,35 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     }
   };
 
+  // ── Generador de diff ────────────────────────────────────────────────────────
+  const buildDiff = (payload) => {
+    const LABELS = {
+      descripcion: "Descripción", proveedor_elegido: "Proveedor elegido",
+      nro_oc: "N° OC", costo_real: "Costo real", moneda_real: "Moneda",
+      plazo_pago: "Plazo pago", fecha_entrega_prom: "Entrega prometida",
+      fecha_entrega_real: "Entrega real", status: "Estado",
+      notas: "Notas", nro_remito: "N° Remito", motivo_proveedor: "Motivo proveedor",
+    };
+    const cambios = [];
+    for (const [k, label] of Object.entries(LABELS)) {
+      const antes = linea[k] ?? "";
+      const despues = payload[k] ?? "";
+      if (String(antes) !== String(despues) && !(antes === "" && despues === null)) {
+        cambios.push({ campo: label, antes: antes || "—", despues: despues || "—" });
+      }
+    }
+    // Diff cotizaciones
+    const c0orig = linea.cotizaciones?.c1 || emptyCotiz();
+    const c0new  = cotiz[0];
+    if (c0orig.proveedor !== c0new.proveedor) cambios.push({ campo: "Cotiz. 1 — Proveedor", antes: c0orig.proveedor || "—", despues: c0new.proveedor || "—" });
+    if (String(c0orig.precio || "") !== String(c0new.precio || "")) cambios.push({ campo: "Cotiz. 1 — Precio", antes: c0orig.precio || "—", despues: c0new.precio || "—" });
+    // Diff ítems
+    const itemsOrig = JSON.stringify(linea.items_detalle || []);
+    const itemsNew  = JSON.stringify(itemsEdit.filter(it => it.descripcion?.trim()));
+    if (itemsOrig !== itemsNew) cambios.push({ campo: "Ítems del pedido", antes: "ver versión anterior", despues: "actualizado" });
+    return cambios;
+  };
+
   const buildPayload = (overrides = {}) => {
     const f = { ...form, ...overrides };
     return {
@@ -681,12 +718,27 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
       status: f.status, notas: f.notas || null, nro_remito: f.nro_remito || null,
       nota_confirmacion: f.nota_confirmacion || null,
       cotizaciones: { c1: cotiz[0], c2: cotiz[1], c3: cotiz[2], adjuntos },
+      items_detalle: itemsEdit.filter(it => it.descripcion?.trim()),
     };
+  };
+
+  // Construye el payload + appends log entry si hay cambios
+  const buildPayloadConLog = (overrides = {}) => {
+    const payload = buildPayload(overrides);
+    const diff = buildDiff(payload);
+    const logsExistentes = linea.cambios_log || [];
+    const nuevaEntrada = {
+      ts: new Date().toISOString(),
+      usuario: usuarioEmail || USUARIO,
+      accion: overrides.status === "oc_emitida" ? "OC emitida" : overrides.status === "entregado" ? "Entrega confirmada" : overrides.status === "pendiente_confirmacion" ? "Solicitó confirmación de valor" : "Guardado manual",
+      cambios: diff,
+    };
+    return { ...payload, cambios_log: [...logsExistentes, nuevaEntrada] };
   };
 
   const handleGuardar = async () => {
     setSaving(true);
-    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload())); }
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog())); }
     catch (e) { alert("Error: " + e.message); }
     finally { setSaving(false); }
   };
@@ -695,14 +747,14 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     if (!form.proveedor_elegido) return alert("Seleccioná el proveedor elegido antes de comprar");
     setSaving(true);
     try {
-      onSave(await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "oc_emitida", fecha_compra: new Date().toISOString() })));
+      onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "oc_emitida", fecha_compra: new Date().toISOString() })));
     } catch (e) { alert("Error: " + e.message); }
     finally { setSaving(false); }
   };
 
   const handleConfirmarEntrega = async () => {
     setSaving(true);
-    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "entregado", fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0], fecha_entrega_ts: new Date().toISOString() }))); }
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "entregado", fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0], fecha_entrega_ts: new Date().toISOString() }))); }
     catch (e) { alert("Error."); }
     finally { setSaving(false); }
   };
@@ -711,7 +763,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     if (!form.costo_real) return alert("Ingresá el valor cotizado antes de solicitar confirmación");
     setSaving(true);
     try {
-      await api.actualizarTrackerLinea(linea.id, buildPayload({ status: "pendiente_confirmacion" }));
+      await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "pendiente_confirmacion" }));
       onSolicitarConfirmacion({ ...linea, ...buildPayload({ status: "pendiente_confirmacion" }) });
     } catch (e) { alert("Error."); }
     finally { setSaving(false); }
@@ -733,7 +785,6 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
   };
 
   const req = linea.requisiciones;
-  const itemsDetalle = linea.items_detalle || [];
   const esConfirmacionPendiente = linea.status === "pendiente_confirmacion";
 
   const COTIZ_STYLES = [
@@ -764,11 +815,33 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
         <div className="mbody">
           {esConfirmacionPendiente && <div className="info-box orange mb12" style={{ fontSize: 12 }}>⏳ Esta línea está esperando confirmación de valor por parte del aprobador.</div>}
 
-          {itemsDetalle.length > 0 && <div className="mb12">
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowDetail(!showDetail)}>{showDetail ? "▲" : "▼"} Ver ítems ({itemsDetalle.length})</button>
-            {showDetail && <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "10px 12px", marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
-              {itemsDetalle.map((it, i) => <div key={i} style={{ padding: "2px 0" }}>· {it.descripcion} × {it.cantidad} {it.unidad}</div>)}
-            </div>}
+          {itemsEdit.length > 0 && <div className="mb12">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowDetail(!showDetail)}>{showDetail ? "▲" : "▼"} Ver ítems ({itemsEdit.length})</button>
+            {showDetail && (
+              <div style={{ marginTop: 8 }}>
+                <table className="items-edit">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "55%" }}>Descripción</th>
+                      <th style={{ width: "15%" }}>Cant.</th>
+                      <th style={{ width: "15%" }}>Unidad</th>
+                      <th style={{ width: "15%" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsEdit.map((it, i) => (
+                      <tr key={i}>
+                        <td><input value={it.descripcion || ""} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], descripcion: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td><input type="number" min="0" value={it.cantidad ?? 1} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], cantidad: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td><input value={it.unidad || ""} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], unidad: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td style={{ textAlign: "center" }}><button onClick={() => setItemsEdit(prev => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer", fontSize: 14 }}>✕</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} onClick={() => setItemsEdit(prev => [...prev, blankItem()])}>+ Agregar ítem</button>
+              </div>
+            )}
           </div>}
 
           <div className="form-section">Cotizaciones</div>
@@ -831,6 +904,76 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
               </div>
             ))}
           </div>}
+
+          {/* ── Log de cambios ─────────────────────────────────────────── */}
+          {(() => {
+            const log = linea.cambios_log || [];
+            if (log.length === 0) return null;
+            const ACCION_COLOR = {
+              "OC emitida": { bg: "#DBEAFE", color: "#1E40AF", icon: "🛒" },
+              "Entrega confirmada": { bg: "#D1FAE5", color: "#065F46", icon: "✓" },
+              "Solicitó confirmación de valor": { bg: "#FEF3C7", color: "#92400E", icon: "🔁" },
+              "Guardado manual": { bg: "#F3F4F6", color: "#374151", icon: "💾" },
+            };
+            return (
+              <div style={{ marginTop: 20 }}>
+                <div className="form-section" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setShowLog(v => !v)}>
+                  <span>📋 Log de cambios ({log.length})</span>
+                  <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>{showLog ? "▲ ocultar" : "▼ ver"}</span>
+                </div>
+                {showLog && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {[...log].reverse().map((entrada, i) => {
+                      const style = ACCION_COLOR[entrada.accion] || ACCION_COLOR["Guardado manual"];
+                      const ts = new Date(entrada.ts);
+                      const fechaStr = ts.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+                      const horaStr  = ts.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+                      // Determinar "rol" del usuario para etiquetarlo
+                      const esComprador = entrada.usuario && (entrada.usuario.includes("compra") || entrada.usuario.includes("admin") || !entrada.usuario.includes("@"));
+                      return (
+                        <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--r2)", overflow: "hidden" }}>
+                          {/* Header de la entrada */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: style.bg }}>
+                            <span style={{ fontSize: 16 }}>{style.icon}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: style.color }}>{entrada.accion}</span>
+                                <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted)", background: "rgba(0,0,0,.05)", padding: "1px 6px", borderRadius: 4 }}>
+                                  {entrada.usuario}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, fontFamily: "var(--mono)" }}>
+                                {fechaStr} {horaStr}
+                              </div>
+                            </div>
+                          </div>
+                          {/* Diff de campos */}
+                          {entrada.cambios?.length > 0 ? (
+                            <div style={{ padding: "8px 12px", background: "var(--surface)", display: "flex", flexDirection: "column", gap: 6 }}>
+                              {entrada.cambios.map((c, j) => (
+                                <div key={j} style={{ display: "grid", gridTemplateColumns: "130px 1fr auto 1fr", gap: "4px 8px", alignItems: "start", fontSize: 11 }}>
+                                  <div style={{ color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".3px", fontSize: 10, paddingTop: 2 }}>{c.campo}</div>
+                                  <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "2px 7px", color: "#991B1B", fontFamily: "var(--mono)", wordBreak: "break-word" }}>
+                                    <span style={{ fontSize: 9, marginRight: 4, opacity: .7 }}>ANTES</span>{String(c.antes)}
+                                  </div>
+                                  <div style={{ color: "var(--muted2)", fontSize: 14, alignSelf: "center" }}>→</div>
+                                  <div style={{ background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "2px 7px", color: "#065F46", fontFamily: "var(--mono)", wordBreak: "break-word" }}>
+                                    <span style={{ fontSize: 9, marginRight: 4, opacity: .7 }}>AHORA</span>{String(c.despues)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ padding: "6px 12px", fontSize: 11, color: "var(--muted)", background: "var(--surface)", fontStyle: "italic" }}>Sin cambios de datos en esta acción</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
         <div className="mftr" style={{ justifyContent: "space-between" }}>
           <button
@@ -984,7 +1127,7 @@ function PageInboxAprobacion({ notify, onNeedRefresh }) {
 }
 
 // ─── PAGE: PARA COTIZAR (comprador ve líneas del tracker) ─────────────────────
-function PageParaCotizar({ notify, onNeedRefresh }) {
+function PageParaCotizar({ notify, onNeedRefresh, usuarioEmail }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -1053,14 +1196,14 @@ function PageParaCotizar({ notify, onNeedRefresh }) {
         })
       }
 
-      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={handleSolicitarConfirmacion} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={handleSolicitarConfirmacion} usuarioEmail={usuarioEmail} />}
       {confirmandoValor && <ConfirmarValorModal linea={confirmandoValor} onClose={() => setConfirmandoValor(null)} onSave={() => { setConfirmandoValor(null); notify("Confirmación enviada", "success"); load(); onNeedRefresh(); }} />}
     </div>
   );
 }
 
 // ─── PAGE: CONFIRMACIÓN DE VALOR (aprobador) ──────────────────────────────────
-function PageConfirmacion({ notify, onNeedRefresh }) {
+function PageConfirmacion({ notify, onNeedRefresh, usuarioEmail }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -1108,7 +1251,7 @@ function PageConfirmacion({ notify, onNeedRefresh }) {
 }
 
 // ─── PAGE: TRACKER GENERAL ────────────────────────────────────────────────────
-function PageTrackerGeneral({ notify, onNeedRefresh }) {
+function PageTrackerGeneral({ notify, onNeedRefresh, usuarioEmail }) {
   const [lineas, setLineas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -1285,7 +1428,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
           </div>
         </div>
       }
-      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} usuarioEmail={usuarioEmail} />}
     </div>
   );
 }
@@ -1352,7 +1495,7 @@ function PageTrackerSimple() {
 }
 
 // ─── PAGE: ARCHIVO ────────────────────────────────────────────────────────────
-function PageArchivo({ tipo }) {
+function PageArchivo({ tipo, usuarioEmail }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -1403,7 +1546,7 @@ function PageArchivo({ tipo }) {
           </div>;
         })
       }
-      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={(updated) => { setSelected(null); if (updated?._deleted) setData(prev => prev.filter(l => l.id !== updated.id)); else load(); }} onSolicitarConfirmacion={() => {}} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={(updated) => { setSelected(null); if (updated?._deleted) setData(prev => prev.filter(l => l.id !== updated.id)); else load(); }} onSolicitarConfirmacion={() => {}} usuarioEmail={usuarioEmail} />}
     </div>
   );
 }
@@ -1858,7 +2001,8 @@ function LoginPage() {
 }
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
-function ComprasApp() {
+function ComprasApp({ session }) {
+  const usuarioEmail = getUsuario(session);
   const [page, setPage] = useState("inbox-aprobacion");
   const [notif, setNotif] = useState(null);
   const [counts, setCounts] = useState({ aprobacion: 0, cotizar: 0, confirmacion: 0, tracker: 0 });
@@ -1955,17 +2099,17 @@ function ComprasApp() {
           <div className="topbar">
             <div className="topbar-title">{pageTitles[page] || page}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#DBEAFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--blue)", fontWeight: 700 }}>C</div>
-              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 500 }}>{USUARIO}</span>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#DBEAFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--blue)", fontWeight: 700 }}>{usuarioEmail[0]?.toUpperCase() || "C"}</div>
+              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 500 }}>{usuarioEmail}</span>
             </div>
           </div>
           <div className="content">
-            {page === "inbox-aprobacion" && <PageInboxAprobacion notify={notify} onNeedRefresh={refresh} />}
-            {page === "para-cotizar" && <PageParaCotizar notify={notify} onNeedRefresh={refresh} />}
-            {page === "confirmacion" && <PageConfirmacion notify={notify} onNeedRefresh={refresh} />}
-            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={refresh} />}
+            {page === "inbox-aprobacion" && <PageInboxAprobacion notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "para-cotizar" && <PageParaCotizar notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "confirmacion" && <PageConfirmacion notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
             {page === "tracker-simple" && <PageTrackerSimple />}
-            {page === "archivo-entregados" && <PageArchivo tipo="entregados" />}
+            {page === "archivo-entregados" && <PageArchivo tipo="entregados" usuarioEmail={usuarioEmail} />}
             {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-aprobacion"); loadCounts(); }} onCancel={() => setPage("inbox-aprobacion")} notify={notify} />}
             {page === "kpis" && <PageKPIs />}
@@ -2029,5 +2173,5 @@ export default function App() {
 
   if (!session) return <LoginPage />;
 
-  return <ComprasApp />;
+  return <ComprasApp session={session} />;
 }
