@@ -180,7 +180,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .overlay{position:fixed;inset:0;background:rgba(33,51,99,.5);display:flex;align-items:flex-start;justify-content:center;z-index:100;padding:20px;overflow-y:auto;animation:fadeIn .15s}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:860px;margin:auto;animation:slideUp .2s;box-shadow:0 8px 32px rgba(33,51,99,.18)}
-.modal-lg{max-width:1000px}
+.modal-lg{max-width:1120px}
 .mhdr{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 22px;border-bottom:1px solid var(--border);background:var(--surface2);border-radius:12px 12px 0 0}
 .mtitle{font-size:13px;font-weight:700;letter-spacing:.5px;color:var(--navy)}
 .mbody{padding:22px}
@@ -245,7 +245,7 @@ tr.click:hover td{background:var(--surface3);cursor:pointer}
 .tracker-simple-row.entregado{border-left:4px solid var(--accent2)}
 /* ── ACTION CARDS ── */
 .req-row-actions{display:flex;flex-direction:row;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);justify-content:flex-end}
-.cotiz-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
+.cotiz-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
 
 /* ── RESPONSIVE MOBILE ── */
 @media (max-width: 768px) {
@@ -746,9 +746,18 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-lg">
         <div className="mhdr">
-          <div>
-            <div className="flex-gap"><div className="grupo-chip">{linea.grupo}</div><div className="mtitle">{form.descripcion}</div></div>
-            {req && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} · {req.base_buque} · {req.area}{req.subarea ? ` › ${req.subarea}` : ""}</div>}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="flex-gap" style={{ marginBottom: 6 }}>
+              <div className="grupo-chip">{linea.grupo}</div>
+              <div className="mtitle">REQ-{req ? String(req.nro_solicitud).padStart(4, "0") : "—"}</div>
+            </div>
+            {req && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>{req.base_buque} · {req.area}{req.subarea ? ` › ${req.subarea}` : ""}</div>}
+            <input
+              value={form.descripcion}
+              onChange={e => set("descripcion", e.target.value)}
+              style={{ width: "100%", fontSize: 14, fontWeight: 700, color: "var(--navy)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px", fontFamily: "var(--sans)", background: "var(--surface)", outline: "none" }}
+              placeholder="Descripción de la línea..."
+            />
           </div>
           <button className="mclose" onClick={onClose}>✕</button>
         </div>
@@ -782,7 +791,17 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
             <FG label="Proveedor elegido *"><select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
             <FG label="N° OC"><input value={form.nro_oc} onChange={e => set("nro_oc", e.target.value)} placeholder="OC-0001" /></FG>
           </div>
-          <FG label="¿Por qué este proveedor?"><textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} /></FG>
+          <div className="form-grid">
+            <FG label="Estado"><select value={form.status} onChange={e => set("status", e.target.value)}>
+              <option value="en_cotizacion">En cotización</option>
+              <option value="pendiente_confirmacion">Pendiente confirmación</option>
+              <option value="oc_emitida">OC emitida</option>
+              <option value="en_transito">En tránsito</option>
+              <option value="entregado">Entregado</option>
+              <option value="archivado">Archivado</option>
+            </select></FG>
+            <FG label="¿Por qué este proveedor?"><textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} style={{ minHeight: 38 }} /></FG>
+          </div>
 
           <div className="form-section">Precio y entrega</div>
           <div className="form-grid-3">
