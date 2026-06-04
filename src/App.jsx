@@ -85,6 +85,15 @@ const api = {
     if (error) throw error;
     return data;
   },
+  async actualizarProveedor(id, cambios) {
+    const { data, error } = await supabase.from("proveedores").update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async eliminarProveedor(id) {
+    const { error } = await supabase.from("proveedores").update({ activo: false }).eq("id", id);
+    if (error) throw error;
+  },
   async subirAdjunto(file, path) {
     const { error } = await supabase.storage.from("cotizaciones").upload(path, file, { upsert: true });
     if (error) throw error;
@@ -804,12 +813,28 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
             ))}
           </div>}
         </div>
-        <div className="mftr">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>💾 Guardar</button>
-          <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
-          <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
-          <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "🛒 Comprar"}</button>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: "var(--danger)" }}
+            disabled={saving}
+            onClick={async () => {
+              if (!confirm("¿Eliminar esta línea del tracker?")) return;
+              try {
+                await supabase.from("tracker_lineas").delete().eq("id", linea.id);
+                onSave({ ...linea, _deleted: true });
+              } catch(e) { alert("Error: " + e.message); }
+            }}
+          >
+            🗑 Eliminar línea
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>💾 Guardar</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
+            <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
+            <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "🛒 Comprar"}</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1086,7 +1111,17 @@ function PageTrackerGeneral({ notify, onNeedRefresh }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleSave = (updated) => { setSelected(null); notify("Línea actualizada", "success"); load(); onNeedRefresh?.(); };
+  const handleSave = (updated) => {
+    setSelected(null);
+    if (updated?._deleted) {
+      setLineas(prev => prev.filter(l => l.id !== updated.id));
+      notify("Línea eliminada", "warn");
+    } else {
+      notify("Línea actualizada", "success");
+      load();
+    }
+    onNeedRefresh?.();
+  };
   const handleSort = (col) => { if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortCol(col); setSortDir("asc"); } };
 
   const lineasFiltradas = lineas.filter(l => {
@@ -1349,7 +1384,7 @@ function PageArchivo({ tipo }) {
           </div>;
         })
       }
-      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={() => { setSelected(null); load(); }} onSolicitarConfirmacion={() => {}} />}
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={(updated) => { setSelected(null); if (updated?._deleted) setData(prev => prev.filter(l => l.id !== updated.id)); else load(); }} onSolicitarConfirmacion={() => {}} />}
     </div>
   );
 }
@@ -1483,28 +1518,108 @@ function PageKPIs() {
 
 // ─── PAGE: PROVEEDORES ────────────────────────────────────────────────────────
 function PageProveedores({ notify }) {
-  const [provs, setProvs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(false);
-  const [selected, setSelected] = useState(null);
+  const emptyForm = { nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" };
+  const [provs, setProvs]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [modal, setModal]       = useState(false);       // nuevo
+  const [modalEditar, setModalEditar] = useState(null);  // editar
+  const [selected, setSelected] = useState(null);        // historial
   const [historial, setHistorial] = useState([]);
-  const [form, setForm] = useState({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" });
+  const [form, setForm]         = useState(emptyForm);
+  const [formEdit, setFormEdit] = useState(emptyForm);
 
-  useEffect(() => { api.getProveedores().then(d => { setProvs(d); setLoading(false); }); }, []);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProvs(await api.getProveedores()); }
+    finally { setLoading(false); }
+  }, []);
 
+  useEffect(() => { load(); }, [load]);
+
+  // ── Crear ──
   const handleSave = async () => {
-    if (!form.nombre) return;
-    const nuevo = await api.crearProveedor({ ...form, activo: true });
-    setProvs(p => [...p, nuevo]); setModal(false);
-    setForm({ nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" });
-    notify("Proveedor agregado", "success");
+    if (!form.nombre.trim()) return;
+    setSaving(true);
+    try {
+      const nuevo = await api.crearProveedor({ ...form, activo: true });
+      setProvs(p => [...p, nuevo]);
+      setModal(false);
+      setForm(emptyForm);
+      notify("Proveedor agregado", "success");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+    finally { setSaving(false); }
   };
 
+  // ── Editar ──
+  const abrirEditar = (prov) => {
+    setFormEdit({
+      nombre:        prov.nombre || "",
+      rubro:         prov.rubro || "",
+      contacto:      prov.contacto || "",
+      email:         prov.email || "",
+      telefono:      prov.telefono || "",
+      notas:         prov.notas || "",
+      palabras_clave: prov.palabras_clave || "",
+    });
+    setModalEditar(prov);
+  };
+
+  const handleUpdate = async () => {
+    if (!formEdit.nombre.trim()) return;
+    setSaving(true);
+    try {
+      const updated = await api.actualizarProveedor(modalEditar.id, formEdit);
+      setProvs(p => p.map(x => x.id === updated.id ? updated : x));
+      setModalEditar(null);
+      notify("Proveedor actualizado", "success");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+
+  // ── Desactivar ──
+  const handleDesactivar = async (prov) => {
+    if (!confirm(`¿Desactivar "${prov.nombre}"? No aparecerá en los listados.`)) return;
+    try {
+      await api.eliminarProveedor(prov.id);
+      setProvs(p => p.filter(x => x.id !== prov.id));
+      if (modalEditar?.id === prov.id) setModalEditar(null);
+      notify("Proveedor desactivado", "warn");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+  };
+
+  // ── Historial ──
   const handleSelect = async (prov) => {
     setSelected(prov);
     const lineas = await api.getTrackerLineas({ proveedor: prov.nombre });
     setHistorial(lineas.filter(l => l.costo_real || l.nro_oc));
   };
+
+  const ModalForm = ({ titulo, formData, setFormData, onGuardar, onCerrar, extraFooter }) => (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onCerrar()}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="mhdr"><div className="mtitle">{titulo}</div><button className="mclose" onClick={onCerrar}>✕</button></div>
+        <div className="mbody">
+          <div className="form-grid">
+            <FG label="Nombre *"><input value={formData.nombre} onChange={e => setFormData(f => ({ ...f, nombre: e.target.value }))} autoFocus /></FG>
+            <FG label="Rubro"><input value={formData.rubro} onChange={e => setFormData(f => ({ ...f, rubro: e.target.value }))} /></FG>
+            <FG label="Contacto"><input value={formData.contacto} onChange={e => setFormData(f => ({ ...f, contacto: e.target.value }))} /></FG>
+            <FG label="Email"><input type="email" value={formData.email} onChange={e => setFormData(f => ({ ...f, email: e.target.value }))} /></FG>
+            <FG label="Teléfono"><input value={formData.telefono} onChange={e => setFormData(f => ({ ...f, telefono: e.target.value }))} /></FG>
+          </div>
+          <FG label="Palabras clave" hint="Separadas por coma"><input value={formData.palabras_clave} onChange={e => setFormData(f => ({ ...f, palabras_clave: e.target.value }))} /></FG>
+          <FG label="Notas"><textarea value={formData.notas} onChange={e => setFormData(f => ({ ...f, notas: e.target.value }))} /></FG>
+        </div>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          {extraFooter || <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onCerrar}>Cancelar</button>
+            <button className="btn btn-primary" onClick={onGuardar} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div>
@@ -1514,10 +1629,22 @@ function PageProveedores({ notify }) {
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>← Volver</button>
             <div style={{ fontSize: 16, fontWeight: 700 }}>{selected.nombre}</div>
             {selected.rubro && <span className="tag">{selected.rubro}</span>}
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => abrirEditar(selected)}>✏ Editar proveedor</button>
+          </div>
+          {/* Datos del proveedor */}
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="card-title">Datos de contacto</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px", fontSize: 12 }}>
+              {selected.contacto && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Contacto</span><div style={{ fontWeight: 600 }}>{selected.contacto}</div></div>}
+              {selected.email && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Email</span><div className="text-mono" style={{ fontSize: 11 }}>{selected.email}</div></div>}
+              {selected.telefono && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Teléfono</span><div>{selected.telefono}</div></div>}
+              {selected.palabras_clave && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Palabras clave</span><div>{selected.palabras_clave}</div></div>}
+              {selected.notas && <div style={{ gridColumn: "1/-1" }}><span style={{ color: "var(--muted)", fontSize: 11 }}>Notas</span><div>{selected.notas}</div></div>}
+            </div>
           </div>
           <div className="card">
             <div className="card-title">Historial de compras</div>
-            {historial.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin compras</div> :
+            {historial.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin compras registradas</div> :
               <table>
                 <thead><tr><th>REQ</th><th>Descripción</th><th>OC</th><th>Precio</th><th>Entrega</th></tr></thead>
                 <tbody>
@@ -1535,35 +1662,63 @@ function PageProveedores({ notify }) {
         </div>
       ) : (
         <div className="card">
-          <div className="card-title">Maestro de proveedores <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar</button></div>
+          <div className="card-title">
+            Maestro de proveedores
+            <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar</button>
+          </div>
           {loading ? <div className="loading"><span className="spin">◌</span></div> :
             <table>
-              <thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th></th></tr></thead>
+              <thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th></th></tr></thead>
               <tbody>
-                {provs.map(p => <tr key={p.id} className="click" onClick={() => handleSelect(p)}><td style={{ fontWeight: 600 }}>{p.nombre}</td><td className="text-muted">{p.rubro || "—"}</td><td>{p.contacto || "—"}</td><td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td><td><span style={{ fontSize: 11, color: "var(--blue)" }}>Ver →</span></td></tr>)}
-                {!provs.length && <tr><td colSpan={5}><div className="empty-state">Sin proveedores</div></td></tr>}
+                {provs.map(p => (
+                  <tr key={p.id}>
+                    <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td className="text-muted">{p.rubro || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{p.contacto || "—"}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{p.telefono || "—"}</td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleSelect(p)}>Ver historial</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}>✏ Editar</button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(p)}>✕</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!provs.length && <tr><td colSpan={6}><div className="empty-state">Sin proveedores</div></td></tr>}
               </tbody>
             </table>
           }
         </div>
       )}
-      {modal && <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(false)}>
-        <div className="modal" style={{ maxWidth: 520 }}>
-          <div className="mhdr"><div className="mtitle">Nuevo Proveedor</div><button className="mclose" onClick={() => setModal(false)}>✕</button></div>
-          <div className="mbody">
-            <div className="form-grid">
-              <FG label="Nombre *"><input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} /></FG>
-              <FG label="Rubro"><input value={form.rubro} onChange={e => setForm(f => ({ ...f, rubro: e.target.value }))} /></FG>
-              <FG label="Contacto"><input value={form.contacto} onChange={e => setForm(f => ({ ...f, contacto: e.target.value }))} /></FG>
-              <FG label="Email"><input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></FG>
-              <FG label="Teléfono"><input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} /></FG>
-            </div>
-            <FG label="Palabras clave" hint="Separadas por coma"><input value={form.palabras_clave} onChange={e => setForm(f => ({ ...f, palabras_clave: e.target.value }))} /></FG>
-            <FG label="Notas"><textarea value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} /></FG>
-          </div>
-          <div className="mftr"><button className="btn btn-ghost" onClick={() => setModal(false)}>Cancelar</button><button className="btn btn-primary" onClick={handleSave}>Guardar</button></div>
-        </div>
-      </div>}
+
+      {/* Modal nuevo */}
+      {modal && <ModalForm
+        titulo="Nuevo Proveedor"
+        formData={form}
+        setFormData={setForm}
+        onGuardar={handleSave}
+        onCerrar={() => { setModal(false); setForm(emptyForm); }}
+      />}
+
+      {/* Modal editar */}
+      {modalEditar && <ModalForm
+        titulo={`Editar — ${modalEditar.nombre}`}
+        formData={formEdit}
+        setFormData={setFormEdit}
+        onGuardar={handleUpdate}
+        onCerrar={() => setModalEditar(null)}
+        extraFooter={
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: "var(--danger)" }}
+            onClick={() => handleDesactivar(modalEditar)}
+          >
+            🗑 Desactivar
+          </button>
+        }
+      />}
     </div>
   );
 }
