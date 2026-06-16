@@ -723,6 +723,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
   };
 
   // Construye el payload + appends log entry si hay cambios
+  // Nota: cambios_log se omite del payload de DB si la columna no existe en tracker_lineas
   const buildPayloadConLog = (overrides = {}) => {
     const payload = buildPayload(overrides);
     const diff = buildDiff(payload);
@@ -733,7 +734,10 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
       accion: overrides.status === "oc_emitida" ? "OC emitida" : overrides.status === "entregado" ? "Entrega confirmada" : overrides.status === "pendiente_confirmacion" ? "Solicitó confirmación de valor" : "Guardado manual",
       cambios: diff,
     };
-    return { ...payload, cambios_log: [...logsExistentes, nuevaEntrada] };
+    // cambios_log omitido: la columna no existe aún en tracker_lineas.
+    // Para activarlo: agregar columna cambios_log (jsonb) en Supabase y usar:
+    // return { ...payload, cambios_log: [...logsExistentes, nuevaEntrada] };
+    return payload;
   };
 
   const handleGuardar = async () => {
