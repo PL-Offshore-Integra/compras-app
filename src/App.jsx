@@ -9,7 +9,7 @@ import { supabase } from "./lib/supabase";
 
 const USUARIO = "Comprador"; // fallback — se sobreescribe con email real del session
 const getUsuario = (session) => session?.user?.email || USUARIO;
-const PORTAL_URL = "https://erp-portal-fawn.vercel.app"; // TODO: migrar a integra.terra-mare.com.ar/parana
+const PORTAL_URL = "https://integra.ploffshore.com";
 const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
 
 const TRACKER_STATUS = {
@@ -389,6 +389,72 @@ tr.click:hover td{background:var(--surface2);cursor:pointer}
   .mobile-nav { display: none !important; }
 }
 
+/* ══ ARMAZÓN · shell del prototipo ═══════════════════════════════════════════
+   La navegación del módulo es BLANCA con borde derecho; el navy es la barra
+   superior. El ítem activo lleva borde izquierdo de 3px en el color de acción.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);align-items:stretch;min-height:100vh}
+.shell.is-collapsed{grid-template-columns:68px minmax(0,1fr)}
+
+.appbar{height:56px;background:var(--nav);display:flex;align-items:center;gap:24px;padding:0 24px;flex:0 0 auto}
+.appbar-iso{height:26px;width:auto;object-fit:contain;display:block;flex:0 0 auto}
+.appbar-div{width:1px;height:24px;background:rgba(255,255,255,.14);flex:0 0 auto}
+.appbar-instance{font:500 14px/1.2 var(--sans);color:#fff;white-space:nowrap;flex:0 0 auto}
+.appbar-search{flex:1;max-width:380px;display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;background:rgba(255,255,255,.10);border:0;border-radius:var(--r);font:400 14px/1.2 var(--sans);color:rgba(255,255,255,.72)}
+.appbar-search::placeholder{color:rgba(255,255,255,.72)}
+.appbar-tools{margin-left:auto;display:flex;align-items:center;gap:16px}
+.appbar-avatar{width:28px;height:28px;border-radius:var(--r);background:rgba(255,255,255,.14);color:#fff;font-family:var(--mono);font-size:12px;font-weight:500;line-height:28px;text-align:center;flex:0 0 auto}
+.appbar-user{font:500 13px/1.25 var(--sans);color:#fff;white-space:nowrap}
+.appbar-link{background:none;border:0;padding:0;cursor:pointer;font:500 13px/1.2 var(--sans);color:rgba(255,255,255,.86);white-space:nowrap}
+.appbar-link:hover{color:#fff;text-decoration:underline}
+
+.sidebar{width:auto;min-width:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sidebar-header{border-bottom:1px solid var(--border);padding:16px;display:flex;align-items:center;gap:12px;min-height:69px}
+.sidebar-logo-img{width:32px;height:32px;object-fit:contain;border:0;border-radius:0;background:none;flex:0 0 auto}
+.sidebar-logo-main{font:600 15px/1.3 var(--sans);color:var(--navy);letter-spacing:0;text-transform:none}
+.sidebar-logo-sub{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-section{padding:14px 16px 8px;font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+.ni{display:flex;align-items:center;gap:12px;width:100%;padding:9px 16px 9px 13px;background:transparent;border:0;border-left:3px solid transparent;cursor:pointer;text-align:left;font:400 14px/1.3 var(--sans);color:var(--muted);transition:var(--tr);min-height:38px}
+.ni:hover{background:var(--surface2);color:var(--navy)}
+.ni.active{background:var(--surface2);border-left-color:var(--action);color:var(--navy);font-weight:500}
+.ni-ico{display:block;flex:0 0 auto;color:var(--muted2)}
+.ni.active .ni-ico{color:var(--action)}
+.ni-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ni-badge{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);background:var(--surface2);padding:3px 6px;border-radius:3px;min-width:22px;text-align:center;border:1px solid var(--border)}
+.ni.active .ni-badge{color:var(--action);background:var(--surface);border-color:var(--border2)}
+.ni-badge.amber{color:var(--warn)}
+.ni-badge.gray{color:var(--muted)}
+.sidebar-foot{border-top:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
+.sidebar-foot-btn{display:flex;align-items:center;gap:12px;width:100%;padding:9px 10px;background:none;border:0;border-radius:var(--r);cursor:pointer;font:500 13px/1.2 var(--sans);color:var(--muted);transition:var(--tr)}
+.sidebar-foot-btn:hover{background:var(--surface2);color:var(--navy)}
+.sidebar-foot-meta{padding:8px 10px 0;font-family:var(--mono);font-size:11px;font-weight:500;line-height:1.6;letter-spacing:.06em;color:var(--muted2)}
+.shell.is-collapsed .sidebar-header{justify-content:center;padding:16px 8px}
+.shell.is-collapsed .ni{justify-content:center;padding:9px 8px 9px 5px}
+.shell.is-collapsed .sidebar-foot-btn{justify-content:center}
+
+/* ── encabezado de pantalla ───────────────────────────────────────────────── */
+.pagehead{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;flex:0 0 auto}
+.crumb{display:flex;align-items:center;gap:8px;font:400 13px/1.2 var(--sans);color:var(--muted)}
+.crumb button{background:none;border:0;padding:0;cursor:pointer;font:400 13px/1.2 var(--sans);color:var(--action)}
+.crumb button:hover{text-decoration:underline;color:var(--navy)}
+.crumb-current{color:var(--text)}
+.pagehead-row{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-top:10px}
+.pagehead h1{font:600 24px/1.25 var(--sans);color:var(--navy);margin:0}
+.pagehead p{font:400 13px/1.45 var(--sans);color:var(--muted);margin:6px 0 0;max-width:70ch}
+.pagehead-actions{display:flex;gap:8px;flex:0 0 auto}
+
+@media (max-width:768px){
+  .shell,.shell.is-collapsed{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .appbar{gap:12px;padding:0 16px}
+  .appbar-search,.appbar-instance{display:none}
+  .pagehead{padding:14px 16px}
+  .pagehead-row{flex-direction:column;align-items:stretch;gap:12px}
+  .pagehead-actions .btn{flex:1}
+  .main{padding-bottom:72px}
+}
+
 `;
 
 function Notif({ msg, onClose }) {
@@ -507,7 +573,7 @@ function AprobarModal({ req, onClose, onSave }) {
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : `✓ Aprobar → Tracker (${grupos.length} línea${grupos.length > 1 ? "s" : ""})`}</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : `Aprobar Tracker (${grupos.length} línea${grupos.length > 1 ? "s" : ""})`}</button>
         </div>
       </div>
     </div>
@@ -568,7 +634,7 @@ function AprobarCondicionalModal({ req, onClose, onSave }) {
                 </tbody>
               </table>
             </div>
-            <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
+            <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>Agregar ítem</button>
             <FG label="Nota para el comprador (opcional)" full><textarea value={nota} onChange={e => setNota(e.target.value)} style={{ marginTop: 8 }} /></FG>
           </>}
           {step === 2 && <>
@@ -590,7 +656,7 @@ function AprobarCondicionalModal({ req, onClose, onSave }) {
           {step === 1 && <button className="btn btn-primary" onClick={() => setStep(2)} disabled={!items.some(it => it.descripcion?.trim())}>Siguiente → Agrupar</button>}
           {step === 2 && <>
             <button className="btn btn-ghost" onClick={() => setStep(1)}>← Volver</button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : "✓ Aprobar con cambios → Tracker"}</button>
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : "Aprobar con cambios → Tracker"}</button>
           </>}
         </div>
       </div>
@@ -628,7 +694,7 @@ function RechazarModal({ req, onClose, onSave }) {
           <div className="mt12" style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px" }}>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 10 }}>
               <input type="radio" checked={devolver} onChange={() => setDevolver(true)} style={{ marginTop: 2, accentColor: "var(--warn)" }} />
-              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--warn)" }}>↩ Devolver para corrección</div></div>
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--warn)" }}>Devolver para corrección</div></div>
             </label>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
               <input type="radio" checked={!devolver} onChange={() => setDevolver(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
@@ -638,7 +704,7 @@ function RechazarModal({ req, onClose, onSave }) {
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>{saving ? "..." : devolver ? "↩ Devolver" : "✕ Rechazar"}</button>
+          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>{saving ? "..." : devolver ? "Devolver" : "✕ Rechazar"}</button>
         </div>
       </div>
     </div>
@@ -861,7 +927,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
           <button className="mclose" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
-          {esConfirmacionPendiente && <div className="info-box orange mb12" style={{ fontSize: 12 }}>⏳ Esta línea está esperando confirmación de valor por parte del aprobador.</div>}
+          {esConfirmacionPendiente && <div className="info-box orange mb12" style={{ fontSize: 12 }}>Esta línea está esperando confirmación de valor por parte del aprobador.</div>}
 
           {itemsEdit.length > 0 && <div className="mb12">
             <button className="btn btn-ghost btn-sm" onClick={() => setShowDetail(!showDetail)}>{showDetail ? "▲" : "▼"} Ver ítems ({itemsEdit.length})</button>
@@ -887,7 +953,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
                     ))}
                   </tbody>
                 </table>
-                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} onClick={() => setItemsEdit(prev => [...prev, blankItem()])}>+ Agregar ítem</button>
+                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} onClick={() => setItemsEdit(prev => [...prev, blankItem()])}>Agregar ítem</button>
               </div>
             )}
           </div>}
@@ -896,7 +962,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
           <div className="cotiz-grid">
             {cotiz.map((c, i) => (
               <div key={i} style={{ borderRadius: "var(--r2)", padding: "12px 14px", ...COTIZ_STYLES[i] }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && "⭐ "}{["Cotización elegida", "Cotización 2", "Cotización 3"][i]}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && ""}{["Cotización elegida", "Cotización 2", "Cotización 3"][i]}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <FG label="Proveedor"><select value={c.proveedor} onChange={e => setCotizField(i, "proveedor", e.target.value)} style={{ fontSize: 12 }}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
                   <FG label="Precio"><input type="number" value={c.precio} onChange={e => setCotizField(i, "precio", e.target.value)} style={{ fontSize: 12 }} /></FG>
@@ -942,11 +1008,11 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
 
           <div className="form-section">Adjuntos</div>
           <input ref={fileRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style={{ display: "none" }} onChange={e => handleUpload(e.target.files)} />
-          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>📎 Adjuntar presupuesto / remito</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>Adjuntar presupuesto o remito</button>
           {adjuntos.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
             {adjuntos.map((adj, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px" }}>
-                <span>📄</span>
+                <span></span>
                 <a href={adj.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", flex: 1 }}>{adj.nombre}</a>
                 <button onClick={async () => { await supabase.storage.from("cotizaciones").remove([adj.path]); setAdjuntos(prev => prev.filter(a => a.path !== adj.path)); }} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer" }}>✕</button>
               </div>
@@ -958,16 +1024,16 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
             const log = linea.cambios_log || [];
             if (log.length === 0) return null;
             const ACCION_COLOR = {
-              "OC emitida": { bg: "#DBEAFE", color: "#1E40AF", icon: "🛒" },
-              "Entrega confirmada": { bg: "#D1FAE5", color: "#065F46", icon: "✓" },
-              "Solicitó confirmación de valor": { bg: "#FEF3C7", color: "#92400E", icon: "🔁" },
-              "Guardado manual": { bg: "#F3F4F6", color: "#374151", icon: "💾" },
+              "OC emitida": { bg: "#DBEAFE", color: "#1E40AF", icon: "" },
+              "Entrega confirmada": { bg: "#D1FAE5", color: "#065F46", icon: "" },
+              "Solicitó confirmación de valor": { bg: "#FEF3C7", color: "#92400E", icon: "" },
+              "Guardado manual": { bg: "#F3F4F6", color: "#374151", icon: "" },
             };
             return (
               <div style={{ marginTop: 20 }}>
                 <div className="form-section" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setShowLog(v => !v)}>
-                  <span>📋 Log de cambios ({log.length})</span>
-                  <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>{showLog ? "▲ ocultar" : "▼ ver"}</span>
+                  <span>Log de cambios ({log.length})</span>
+                  <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>{showLog ? "Ocultar" : "Ver"}</span>
                 </div>
                 {showLog && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1036,14 +1102,14 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
               } catch(e) { alert("Error: " + e.message); }
             }}
           >
-            🗑 Eliminar línea
+            Eliminar línea
           </button>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-            <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>💾 Guardar</button>
-            <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>✓ Confirmar entrega</button>
-            <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">🔁 Solicitar conf. valor</button>
-            <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "🛒 Comprar"}</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>Guardar</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>Confirmar entrega</button>
+            <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">Solicitar confirmación de valor</button>
+            <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "Comprar"}</button>
           </div>
         </div>
       </div>
@@ -1091,18 +1157,18 @@ function ConfirmarValorModal({ linea, onClose, onSave }) {
           <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px", marginBottom: 14 }}>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
               <input type="radio" checked={aprobado} onChange={() => setAprobado(true)} style={{ marginTop: 2, accentColor: "var(--accent2)" }} />
-              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent2)" }}>✓ Autorizar compra</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor es aceptable. El comprador puede emitir la OC.</div></div>
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent2)" }}>Autorizar compra</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor es aceptable. El comprador puede emitir la OC.</div></div>
             </label>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
               <input type="radio" checked={!aprobado} onChange={() => setAprobado(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
-              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>✕ Volver a cotizar</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor no es aceptable. El comprador debe buscar alternativas.</div></div>
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>Volver a cotizar</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor no es aceptable. El comprador debe buscar alternativas.</div></div>
             </label>
           </div>
           <FG label="Comentario para el comprador"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Explicación adicional..." /></FG>
         </div>
         <div className="mftr">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className={`btn ${aprobado ? "btn-success" : "btn-danger"}`} onClick={handleSave} disabled={saving}>{saving ? "..." : aprobado ? "✓ Autorizar compra" : "✕ Volver a cotizar"}</button>
+          <button className={`btn ${aprobado ? "btn-success" : "btn-danger"}`} onClick={handleSave} disabled={saving}>{saving ? "..." : aprobado ? "Autorizar compra" : "Volver a cotizar"}</button>
         </div>
       </div>
     </div>
@@ -1136,19 +1202,15 @@ function PageInboxAprobacion({ notify, onNeedRefresh }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>⏳ Pendientes de aprobación</div>
-        <span className="ni-badge" style={{ position: "static" }}>{reqs.length}</span>
-      </div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin requisiciones pendientes</div> :
+        reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin requisiciones pendientes</div> :
         reqs.map(r => (
           <div key={r.id} className={`req-row ${r.veces_devuelto > 0 ? "devuelto" : "unread"}`}>
             {/* INFO: siempre visible primero */}
             <div className="flex-gap mb8" onClick={() => setSelected(r)} style={{ cursor: "pointer", flexWrap: "wrap" }}>
               <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
               <UrgBadge urgencia={r.urgencia} />
-              {r.veces_devuelto > 0 && <span className="badge b-orange">↩ {r.veces_devuelto}x</span>}
+              {r.veces_devuelto > 0 && <span className="badge b-orange">{r.veces_devuelto}x</span>}
             </div>
             <div className="req-title" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>{r.titulo}</div>
             <div className="req-meta" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
@@ -1159,7 +1221,7 @@ function PageInboxAprobacion({ notify, onNeedRefresh }) {
             </div>
             {/* ACCIONES: debajo del contenido, full-width en mobile */}
             <div className="req-row-actions">
-              <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>✓ Aprobar →</button>
+              <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>Aprobar</button>
               <button className="btn btn-cond btn-sm" onClick={() => setAprobandoCond(r)}>Aprob. condicional</button>
               <button className="btn btn-danger btn-sm" onClick={() => setRechazando(r)}>Rechazar</button>
             </div>
@@ -1210,14 +1272,9 @@ function PageParaCotizar({ notify, onNeedRefresh, usuarioEmail }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>📥 Para cotizar</div>
-        <span className="ni-badge" style={{ position: "static", background: "var(--warn)" }}>{lineas.filter(l => l.status === "en_cotizacion").length}</span>
-        {lineas.filter(l => l.status === "pendiente_confirmacion").length > 0 && <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.filter(l => l.status === "pendiente_confirmacion").length} conf. pendiente</span>}
-      </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>Sin líneas para cotizar</div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin líneas para cotizar</div> :
         lineas.map(l => {
           const req = l.requisiciones;
           const esPendConf = l.status === "pendiente_confirmacion";
@@ -1269,12 +1326,8 @@ function PageConfirmacion({ notify, onNeedRefresh, usuarioEmail }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: "2px solid var(--border)" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--navy)" }}>🔁 Confirmación de valor</div>
-        <span className="ni-badge" style={{ position: "static", background: "var(--orange)" }}>{lineas.length}</span>
-      </div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>Sin confirmaciones pendientes</div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin confirmaciones pendientes</div> :
         lineas.map(l => {
           const req = l.requisiciones;
           return (
@@ -1406,7 +1459,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh, usuarioEmail }) {
       </div>
 
       <div className="filter-row">
-        <input className="filter-input" placeholder="🔍 Buscar..." value={filtros.busqueda} onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))} />
+        <input className="filter-input" placeholder="Buscar..." value={filtros.busqueda} onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))} />
         <select className="filter-select" value={filtros.status} onChange={e => setFiltros(f => ({ ...f, status: e.target.value }))}>
           <option value="">Todos los estados</option>
           {Object.entries(TRACKER_STATUS).filter(([k]) => k !== "archivado").map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -1423,7 +1476,7 @@ function PageTrackerGeneral({ notify, onNeedRefresh, usuarioEmail }) {
       </div>
 
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>Sin líneas</div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin líneas</div> :
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div className="table-wrap">
             <table className="tracker-table">
@@ -1504,7 +1557,7 @@ function PageTrackerSimple() {
     <div>
       <div className="info-box accent mb16" style={{ fontSize: 11 }}>Vista de seguimiento — estado de pedidos sin valores ni cotizaciones.</div>
       <div className="filter-row">
-        <input className="filter-input" placeholder="🔍 Buscar..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+        <input className="filter-input" placeholder="Buscar..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
         <select className="filter-select" value={filtroBase} onChange={e => setFiltroBase(e.target.value)}>
           <option value="">Todos los barcos</option>
           {bases.map(b => <option key={b}>{b}</option>)}
@@ -1513,7 +1566,7 @@ function PageTrackerSimple() {
         <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{filtradas.length} pedidos</span>
       </div>
       {loading ? <div className="loading"><span className="spin">◌</span></div> :
-        filtradas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>Sin pedidos</div> :
+        filtradas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin pedidos</div> :
         filtradas.map(l => {
           const req = l.requisiciones;
           const entregado = l.status === "entregado";
@@ -1664,7 +1717,7 @@ function ReqForm({ proveedores = [], onSave, onCancel }) {
           </tbody>
         </table>
       </div>
-      <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>+ Agregar ítem</button>
+      <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>Agregar ítem</button>
       <div className="flex-gap form-footer-actions mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
         <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
         <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Crear Requisición"}</button>
@@ -1839,7 +1892,7 @@ function PageProveedores({ notify }) {
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>← Volver</button>
             <div style={{ fontSize: 16, fontWeight: 700 }}>{selected.nombre}</div>
             {selected.rubro && <span className="tag">{selected.rubro}</span>}
-            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => abrirEditar(selected)}>✏ Editar proveedor</button>
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => abrirEditar(selected)}> Editar proveedor</button>
           </div>
           {/* Datos del proveedor */}
           <div className="card" style={{ marginBottom: 12 }}>
@@ -1890,7 +1943,7 @@ function PageProveedores({ notify }) {
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button className="btn btn-ghost btn-sm" onClick={() => handleSelect(p)}>Ver historial</button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}>✏ Editar</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}> Editar</button>
                         <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(p)}>✕</button>
                       </div>
                     </td>
@@ -1925,7 +1978,7 @@ function PageProveedores({ notify }) {
             style={{ color: "var(--danger)" }}
             onClick={() => handleDesactivar(modalEditar)}
           >
-            🗑 Desactivar
+             Desactivar
           </button>
         }
       />}
@@ -2058,6 +2111,8 @@ function ComprasApp({ session }) {
     setNotif({ text, type }); setTimeout(() => setNotif(null), 4000);
   }, []);
 
+  const [navOpen, setNavOpen] = useState(true);
+
   const loadCounts = useCallback(async () => {
     try {
       const [reqs, tracker] = await Promise.all([
@@ -2075,80 +2130,157 @@ function ComprasApp({ session }) {
 
   useEffect(() => { loadCounts(); }, [loadCounts, refreshKey]);
 
-  const pageTitles = {
-    "inbox-aprobacion": "PENDIENTES DE APROBACIÓN",
-    "para-cotizar": "PARA COTIZAR",
-    "confirmacion": "CONFIRMACIÓN DE VALOR",
-    "tracker": "TRACKER — COMPRAS EN CURSO",
-    "tracker-simple": "SEGUIMIENTO DE PEDIDOS",
-    "archivo-entregados": "ARCHIVO — ENTREGADOS",
-    "archivo-rechazados": "ARCHIVO — RECHAZADOS",
-    "nueva": "NUEVA REQUISICIÓN",
-    "kpis": "KPIs & REPORTES",
-    "proveedores": "PROVEEDORES",
+  /* ── Iconos de línea · trazo 1,6 · sin relleno · toman el color del texto ──
+     El brand book declara el set propio pendiente para la v1.1. Hasta entonces,
+     estas formas mínimas reemplazan a los emoji, que están prohibidos. */
+  const Ico = ({ d, size = 18 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>
+  );
+  const ICONS = {
+    clock:   <><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></>,
+    file:    <><path d="M14 3H7a1.6 1.6 0 0 0-1.6 1.6v14.8A1.6 1.6 0 0 0 7 21h10a1.6 1.6 0 0 0 1.6-1.6V7.6z" /><path d="M14 3v4.6h4.6" /></>,
+    swap:    <><path d="M4 8h13l-3-3" /><path d="M20 16H7l3 3" /></>,
+    list:    <><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" /></>,
+    eye:     <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></>,
+    check:   <path d="M4.5 12.5l5 5 10-11" />,
+    x:       <path d="M6 6l12 12M18 6L6 18" />,
+    plus:    <path d="M12 5v14M5 12h14" />,
+    chart:   <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
+    factory: <><path d="M3 21V10l6 4V10l6 4V6l6 3v12z" /><path d="M3 21h18" /></>,
+    back:    <><path d="M19 12H5" /><path d="M11 6l-6 6 6 6" /></>,
+    panel:   <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9.5 4v16" /></>,
+    search:  <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
+    bell:    <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
+    help:    <><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.3c-.7.4-1.1 1-1.1 1.7v.3" /><path d="M12 17.5h.01" /></>,
   };
 
-  const NI = ({ id, icon, label, badge, badgeColor, sub }) => (
-    <div className={`ni ${sub ? "sub" : ""} ${page === id ? "active" : ""}`} onClick={() => setPage(id)}>
-      <span className="ni-icon">{icon}</span>
-      <span>{label}</span>
-      {badge > 0 && <span className={`ni-badge ${badgeColor || ""}`}>{badge}</span>}
-    </div>
-  );
+  /* Título, bajada y grupo de cada pantalla. Un solo lugar que lo declara. */
+  const SECCIONES = {
+    "inbox-aprobacion":  { grupo: "Bandeja",     titulo: "Pendientes de aprobación", sub: "Requisiciones que esperan tu decisión. La fecha de necesidad ordena la prioridad operativa." },
+    "para-cotizar":      { grupo: "Bandeja",     titulo: "Para cotizar",             sub: "Aprobadas y a la espera de cotizaciones de proveedores habilitados." },
+    "confirmacion":      { grupo: "Bandeja",     titulo: "Confirmación de valor",    sub: "Cotizadas y pendientes de confirmar el valor final antes de emitir la orden." },
+    "tracker":           { grupo: "Seguimiento", titulo: "Compras en curso",         sub: "Órdenes emitidas, con proveedor y fecha de entrega comprometida." },
+    "tracker-simple":    { grupo: "Seguimiento", titulo: "Seguimiento de entregas",  sub: "Avance de cada orden desde la emisión hasta la recepción a bordo." },
+    "archivo-entregados":{ grupo: "Archivo",     titulo: "Entregados",               sub: "Recepción confirmada a bordo o en base, con remito asociado." },
+    "archivo-rechazados":{ grupo: "Archivo",     titulo: "Rechazados",               sub: "Requisiciones rechazadas, con motivo y responsable de la decisión." },
+    "nueva":             { grupo: "Gestión",     titulo: "Nueva requisición",        sub: "Los campos obligatorios definen el circuito de aprobación." },
+    "proveedores":       { grupo: "Gestión",     titulo: "Proveedores",              sub: "Padrón habilitado, con rubro, condición fiscal y datos de contacto." },
+    "kpis":              { grupo: "Gestión",     titulo: "KPIs y reportes",          sub: "Tiempo de ciclo, cumplimiento de entrega y distribución por rubro." },
+  };
 
+  const NAV = [
+    { titulo: "Bandeja", items: [
+      { id: "inbox-aprobacion", icon: "clock", label: "Pendientes de aprobación", count: counts.aprobacion },
+      { id: "para-cotizar",     icon: "file",  label: "Para cotizar",             count: counts.cotizar, tone: "amber" },
+      { id: "confirmacion",     icon: "swap",  label: "Confirmación de valor",    count: counts.confirmacion, tone: "amber" },
+    ]},
+    { titulo: "Seguimiento", items: [
+      { id: "tracker",        icon: "list", label: "Compras en curso",        count: counts.tracker, tone: "gray" },
+      { id: "tracker-simple", icon: "eye",  label: "Seguimiento de entregas", count: 0 },
+    ]},
+    { titulo: "Archivo", items: [
+      { id: "archivo-entregados", icon: "check", label: "Entregados", count: 0 },
+      { id: "archivo-rechazados", icon: "x",     label: "Rechazados", count: 0 },
+    ]},
+    { titulo: "Gestión", items: [
+      { id: "nueva",       icon: "plus",    label: "Nueva requisición", count: 0 },
+      { id: "proveedores", icon: "factory", label: "Proveedores",       count: 0 },
+      { id: "kpis",        icon: "chart",   label: "KPIs y reportes",   count: 0 },
+    ]},
+  ];
+
+  const seccion = SECCIONES[page] || { grupo: "Compras", titulo: page, sub: "" };
   const refresh = () => { setRefreshKey(k => k + 1); loadCounts(); };
+  const inicial = (usuarioEmail || "C").replace(/@.*$/, "").slice(0, 2).toUpperCase();
 
   return (
     <>
       <style>{CSS}</style>
-      <div className="app">
+
+      <header className="appbar">
+        <img src="/integra-isotipo-white.svg" alt="INTEGRA" className="appbar-iso" />
+        <span className="appbar-div" />
+        <span className="appbar-instance">PL Offshore</span>
+        <input className="appbar-search" type="search" disabled placeholder="Buscar en todo INTEGRA" aria-label="Buscar" />
+        <div className="appbar-tools">
+          <span style={{ color: "rgba(255,255,255,.86)", display: "block" }}><Ico d={ICONS.bell} /></span>
+          <span style={{ color: "rgba(255,255,255,.86)", display: "block" }}><Ico d={ICONS.help} /></span>
+          <span className="appbar-div" />
+          <span className="appbar-avatar">{inicial}</span>
+          <span className="appbar-user">{usuarioEmail}</span>
+          <button className="appbar-link" onClick={() => window.location.href = PORTAL_URL}>Volver al portal</button>
+        </div>
+      </header>
+
+      <div className={`shell ${navOpen ? "" : "is-collapsed"}`}>
         <nav className="sidebar">
           <div className="sidebar-header">
-            <div className="sidebar-logo-wrap">
-              <img src="/PL.png" alt="PL Offshore" className="sidebar-logo-img" />
+            <img src="/PL.png" alt="PL Offshore" className="sidebar-logo-img" />
+            {navOpen && (
               <div>
-                <div className="sidebar-logo-main">Compras Técnicas</div>
+                <div className="sidebar-logo-main">Compras</div>
                 <div className="sidebar-logo-sub">PL Offshore</div>
               </div>
-            </div>
+            )}
           </div>
 
-          <div className="nav-section">Inbox</div>
-          <NI id="inbox-aprobacion" icon="⏳" label="Pend. aprobación" badge={counts.aprobacion} />
-          <NI id="para-cotizar" icon="📥" label="Para cotizar" badge={counts.cotizar} badgeColor="amber" />
-          <NI id="confirmacion" icon="🔁" label="Conf. de valor" badge={counts.confirmacion} badgeColor="amber" />
+          <div className="sidebar-nav">
+            {NAV.map(grupo => (
+              <div key={grupo.titulo} style={{ marginBottom: 8 }}>
+                {navOpen && <div className="nav-section">{grupo.titulo}</div>}
+                {grupo.items.map(it => (
+                  <button
+                    key={it.id}
+                    className={`ni ${page === it.id ? "active" : ""}`}
+                    onClick={() => setPage(it.id)}
+                    title={it.label}
+                  >
+                    <span className="ni-ico"><Ico d={ICONS[it.icon]} /></span>
+                    {navOpen && <span className="ni-label">{it.label}</span>}
+                    {it.count > 0 && <span className={`ni-badge ${it.tone || ""}`}>{it.count}</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
 
-          <div className="nav-section">Tracker</div>
-          <NI id="tracker" icon="📊" label="Compras en curso" badge={counts.tracker} badgeColor="gray" />
-          <NI id="tracker-simple" icon="👁" label="Seguimiento" sub />
-
-          <div className="nav-section">Archivo</div>
-          <NI id="archivo-entregados" icon="✓" label="Entregados" sub />
-          <NI id="archivo-rechazados" icon="✗" label="Rechazados" sub />
-
-          <div className="nav-section">Gestión</div>
-          <NI id="nueva" icon="✚" label="Nueva Requisición" />
-          <NI id="kpis" icon="📈" label="KPIs & Reportes" />
-          <NI id="proveedores" icon="🏭" label="Proveedores" />
-
-          <div style={{ flex: 1 }} />
-          <div style={{ padding: "12px 18px", borderTop: "1px solid rgba(255,255,255,.1)" }}>
-            <div className="ni back" onClick={() => window.location.href = PORTAL_URL}>
-              <span className="ni-icon">←</span>
-              <span>Volver al portal</span>
-            </div>
-            <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", fontFamily: "var(--mono)", letterSpacing: 1, marginTop: 8 }}>COMPRAS TÉCNICAS v4.0</div>
+          <div className="sidebar-foot">
+            <button className="sidebar-foot-btn" onClick={() => setNavOpen(v => !v)}>
+              <span style={{ display: "block", color: "var(--muted2)" }}><Ico d={ICONS.panel} size={16} /></span>
+              {navOpen && <span style={{ flex: 1, textAlign: "left" }}>Colapsar menú</span>}
+            </button>
+            {navOpen && (
+              <div className="sidebar-foot-meta">
+                <div>COMPRAS v4.0</div>
+                <div>POWERED BY INTEGRA</div>
+              </div>
+            )}
           </div>
         </nav>
 
         <div className="main">
-          <div className="topbar">
-            <div className="topbar-title">{pageTitles[page] || page}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#DBEAFE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--blue)", fontWeight: 700 }}>{usuarioEmail[0]?.toUpperCase() || "C"}</div>
-              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 500 }}>{usuarioEmail}</span>
+          <div className="pagehead">
+            <div className="crumb">
+              <button onClick={() => window.location.href = PORTAL_URL}>Portal</button>
+              <span>/</span>
+              <button onClick={() => setPage("inbox-aprobacion")}>Compras</button>
+              <span>/</span>
+              <span className="crumb-current">{seccion.titulo}</span>
+            </div>
+            <div className="pagehead-row">
+              <div>
+                <h1>{seccion.titulo}</h1>
+                {seccion.sub && <p>{seccion.sub}</p>}
+              </div>
+              {page !== "nueva" && (
+                <div className="pagehead-actions">
+                  <button className="btn btn-primary" onClick={() => setPage("nueva")}>Nueva requisición</button>
+                </div>
+              )}
             </div>
           </div>
+
           <div className="content">
             {page === "inbox-aprobacion" && <PageInboxAprobacion notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
             {page === "para-cotizar" && <PageParaCotizar notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
@@ -2163,32 +2295,28 @@ function ComprasApp({ session }) {
           </div>
         </div>
       </div>
+
       <Notif msg={notif} onClose={() => setNotif(null)} />
-      {/* Bottom nav — solo visible en mobile */}
+
+      {/* Navegación inferior · solo mobile. Etiqueta mono en lugar de icono. */}
       <nav className="mobile-nav">
-        <div className={`mobile-nav-item ${page === "inbox-aprobacion" ? "active" : ""}`} onClick={() => setPage("inbox-aprobacion")}>
-          <span className="mobile-nav-icon">⏳</span>
-          <span className="mobile-nav-label">Aprobac.</span>
-          {counts.aprobacion > 0 && <span className="mobile-nav-badge">{counts.aprobacion}</span>}
-        </div>
-        <div className={`mobile-nav-item ${page === "para-cotizar" ? "active" : ""}`} onClick={() => setPage("para-cotizar")}>
-          <span className="mobile-nav-icon">📥</span>
-          <span className="mobile-nav-label">Cotizar</span>
-          {counts.cotizar > 0 && <span className="mobile-nav-badge amber">{counts.cotizar}</span>}
-        </div>
-        <div className={`mobile-nav-item ${page === "tracker" ? "active" : ""}`} onClick={() => setPage("tracker")}>
-          <span className="mobile-nav-icon">📊</span>
-          <span className="mobile-nav-label">Tracker</span>
-          {counts.tracker > 0 && <span className="mobile-nav-badge gray">{counts.tracker}</span>}
-        </div>
-        <div className={`mobile-nav-item ${page === "nueva" ? "active" : ""}`} onClick={() => setPage("nueva")}>
-          <span className="mobile-nav-icon">✚</span>
-          <span className="mobile-nav-label">Nueva</span>
-        </div>
-        <div className={`mobile-nav-item ${page === "proveedores" ? "active" : ""}`} onClick={() => setPage("proveedores")}>
-          <span className="mobile-nav-icon">🏭</span>
-          <span className="mobile-nav-label">Proveed.</span>
-        </div>
+        {[
+          { id: "inbox-aprobacion", label: "Aprobar",  icon: "clock", count: counts.aprobacion },
+          { id: "para-cotizar",     label: "Cotizar",  icon: "file",  count: counts.cotizar },
+          { id: "tracker",          label: "En curso", icon: "list",  count: counts.tracker },
+          { id: "nueva",            label: "Nueva",    icon: "plus",  count: 0 },
+          { id: "proveedores",      label: "Padrón",   icon: "factory", count: 0 },
+        ].map(it => (
+          <div
+            key={it.id}
+            className={`mobile-nav-item ${page === it.id ? "active" : ""}`}
+            onClick={() => setPage(it.id)}
+          >
+            <span className="mobile-nav-icon"><Ico d={ICONS[it.icon]} size={18} /></span>
+            <span className="mobile-nav-label">{it.label}</span>
+            {it.count > 0 && <span className="mobile-nav-badge">{it.count}</span>}
+          </div>
+        ))}
       </nav>
     </>
   );
