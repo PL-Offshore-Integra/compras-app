@@ -118,6 +118,43 @@ const api = {
     if (error) throw error;
     return data;
   },
+  // ── Catálogo de Compras (productos propios mapeados a Xubio) ──
+  async getCatalogoCompras(empresa = "pl_offshore") {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .select("*")
+      .eq("empresa", empresa)
+      .eq("activo", true)
+      .order("nombre");
+    if (error) throw error;
+    return data || [];
+  },
+  async crearProductoCatalogo(prod) {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .insert([prod])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  async actualizarProductoCatalogo(id, cambios) {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .update({ ...cambios, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  async eliminarProductoCatalogo(id) {
+    const { error } = await supabase
+      .from("catalogo_compras")
+      .update({ activo: false })
+      .eq("id", id);
+    if (error) throw error;
+  },
 };
 
 const CSS = `
@@ -1755,6 +1792,233 @@ function PageNueva({ onSaved, onCancel, notify }) {
 }
 
 // ─── PAGE: KPIs ──────────────────────────────────────────────────────────────
+function PageCatalogo({ notify }) {
+  const emptyForm = { nombre: "", descripcion: "", unidad: "", rubro: "", categoria_xubio_id: "" };
+  const [items, setItems]         = useState([]);
+  const [xubioProds, setXubioProds] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [saving, setSaving]       = useState(false);
+  const [modal, setModal]         = useState(false);
+  const [modalEditar, setModalEditar] = useState(null);
+  const [form, setForm]           = useState(emptyForm);
+  const [busca, setBusca]         = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [cat, xub] = await Promise.all([
+        api.getCatalogoCompras("pl_offshore"),
+        api.getXubioProductos("pl_offshore"),
+      ]);
+      setItems(cat);
+      setXubioProds(xub);
+    } catch (e) {
+      notify("Error al cargar: " + e.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const nombreCategoria = (xubioId) => {
+    const p = xubioProds.find(x => String(x.xubio_id) === String(xubioId));
+    return p ? p.nombre : "—";
+  };
+
+  const handleSave = async () => {
+    if (!form.nombre.trim()) { notify("El nombre es obligatorio", "error"); return; }
+    if (!form.categoria_xubio_id) { notify("Elegí una categoría de Xubio", "error"); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        empresa: "pl_offshore",
+        nombre: form.nombre.trim(),
+        descripcion: form.descripcion || null,
+        unidad: form.unidad || null,
+        rubro: form.rubro || null,
+        categoria_xubio_id: Number(form.categoria_xubio_id),
+        activo: true,
+      };
+      const nuevo = await api.crearProductoCatalogo(payload);
+      setItems(prev => [...prev, nuevo]);
+      setModal(false);
+      setForm(emptyForm);
+      notify("Producto agregado al catálogo", "success");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const abrirEditar = (prod) => {
+    setForm({
+      nombre: prod.nombre || "",
+      descripcion: prod.descripcion || "",
+      unidad: prod.unidad || "",
+      rubro: prod.rubro || "",
+      categoria_xubio_id: prod.categoria_xubio_id != null ? String(prod.categoria_xubio_id) : "",
+    });
+    setModalEditar(prod);
+  };
+
+  const handleUpdate = async () => {
+    if (!form.nombre.trim()) { notify("El nombre es obligatorio", "error"); return; }
+    if (!form.categoria_xubio_id) { notify("Elegí una categoría de Xubio", "error"); return; }
+    setSaving(true);
+    try {
+      const cambios = {
+        nombre: form.nombre.trim(),
+        descripcion: form.descripcion || null,
+        unidad: form.unidad || null,
+        rubro: form.rubro || null,
+        categoria_xubio_id: Number(form.categoria_xubio_id),
+      };
+      const upd = await api.actualizarProductoCatalogo(modalEditar.id, cambios);
+      setItems(prev => prev.map(x => x.id === upd.id ? upd : x));
+      setModalEditar(null);
+      setForm(emptyForm);
+      notify("Producto actualizado", "success");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDesactivar = async (prod) => {
+    if (!confirm(`¿Desactivar "${prod.nombre}"? No aparecerá en el catálogo.`)) return;
+    try {
+      await api.eliminarProductoCatalogo(prod.id);
+      setItems(prev => prev.filter(x => x.id !== prod.id));
+      if (modalEditar?.id === prod.id) { setModalEditar(null); setForm(emptyForm); }
+      notify("Producto desactivado", "warn");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    }
+  };
+
+  const filtrados = items.filter(p => {
+    if (!busca.trim()) return true;
+    const t = busca.toLowerCase();
+    return (p.nombre || "").toLowerCase().includes(t) ||
+           (p.rubro || "").toLowerCase().includes(t);
+  });
+
+  const ModalProducto = ({ titulo, onGuardar, onCerrar, extraFooter }) => (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onCerrar()}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="mhdr"><div className="mtitle">{titulo}</div><button className="mclose" onClick={onCerrar}>✕</button></div>
+        <div className="mbody">
+          <div className="form-grid">
+            <FG label="Nombre *"><input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} autoFocus /></FG>
+            <FG label="Rubro"><input value={form.rubro} onChange={e => setForm(f => ({ ...f, rubro: e.target.value }))} placeholder="Proteínas, Repuestos…" /></FG>
+            <FG label="Unidad"><input value={form.unidad} onChange={e => setForm(f => ({ ...f, unidad: e.target.value }))} placeholder="kg, unidad, litro…" /></FG>
+          </div>
+          <FG label="Descripción"><textarea value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} /></FG>
+          <FG label="Categoría Xubio *" hint="A qué producto contable de Xubio se imputa">
+            <select value={form.categoria_xubio_id} onChange={e => setForm(f => ({ ...f, categoria_xubio_id: e.target.value }))}>
+              <option value="">— Elegir categoría —</option>
+              {xubioProds.map(x => (
+                <option key={x.xubio_id} value={x.xubio_id}>
+                  {x.nombre}{x.codigo ? ` (${x.codigo})` : ""}
+                </option>
+              ))}
+            </select>
+          </FG>
+          {xubioProds.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>
+              No hay categorías de Xubio sincronizadas. Andá a "Catálogo Xubio" y sincronizá primero.
+            </div>
+          )}
+        </div>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          {extraFooter || <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onCerrar}>Cancelar</button>
+            <button className="btn btn-primary" onClick={onGuardar} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">
+          Catálogo de productos (PL Offshore)
+          <button className="btn btn-primary btn-sm" onClick={() => { setForm(emptyForm); setModal(true); }}>+ Agregar</button>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <input
+            type="search"
+            placeholder="Buscar por nombre o rubro…"
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            style={{
+              maxWidth: 320, width: "100%", height: 38, padding: "0 12px",
+              border: "1px solid var(--border, #C9D0D6)", borderRadius: 4,
+              font: "400 13px/1.2 'IBM Plex Sans', sans-serif", outline: "none",
+            }}
+          />
+          <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted)" }}>
+            {filtrados.length} de {items.length} productos
+          </span>
+        </div>
+
+        {loading ? <div className="loading"><span className="spin">◌</span></div> :
+          <table>
+            <thead><tr><th>Producto</th><th>Rubro</th><th>Unidad</th><th>Categoría Xubio</th><th></th></tr></thead>
+            <tbody>
+              {filtrados.map(p => (
+                <tr key={p.id}>
+                  <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.rubro || "—"}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.unidad || "—"}</td>
+                  <td style={{ fontSize: 12 }}>{nombreCategoria(p.categoria_xubio_id)}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}>Editar</button>
+                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(p)}>✕</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!filtrados.length && (
+                <tr><td colSpan={5}><div className="empty-state">
+                  {items.length === 0
+                    ? "Todavía no hay productos. Tocá \"+ Agregar\" para crear el primero."
+                    : "Ningún producto coincide con la búsqueda."}
+                </div></td></tr>
+              )}
+            </tbody>
+          </table>
+        }
+      </div>
+
+      {modal && <ModalProducto
+        titulo="Nuevo producto"
+        onGuardar={handleSave}
+        onCerrar={() => { setModal(false); setForm(emptyForm); }}
+      />}
+
+      {modalEditar && <ModalProducto
+        titulo={`Editar — ${modalEditar.nombre}`}
+        onGuardar={handleUpdate}
+        onCerrar={() => { setModalEditar(null); setForm(emptyForm); }}
+        extraFooter={
+          <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(modalEditar)}>
+            Desactivar
+          </button>
+        }
+      />}
+    </div>
+  );
+}
+
 function PageCatalogoXubio({ notify }) {
   const [productos, setProductos] = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -2273,6 +2537,7 @@ function ComprasApp({ session }) {
     "archivo-rechazados":{ grupo: "Archivo",     titulo: "Rechazados",               sub: "Requisiciones rechazadas, con motivo y responsable de la decisión." },
     "nueva":             { grupo: "Gestión",     titulo: "Nueva requisición",        sub: "Los campos obligatorios definen el circuito de aprobación." },
     "proveedores":       { grupo: "Gestión",     titulo: "Proveedores",              sub: "Padrón habilitado, con rubro, condición fiscal y datos de contacto." },
+    "catalogo":          { grupo: "Gestión",     titulo: "Catálogo",                 sub: "Productos de compra propios. Cada uno se imputa a una categoría contable de Xubio." },
     "catalogo-xubio":    { grupo: "Gestión",     titulo: "Catálogo Xubio",           sub: "Productos de compra sincronizados desde Xubio. Xubio es la fuente de verdad; acá se ven en modo lectura." },
     "kpis":              { grupo: "Gestión",     titulo: "KPIs y reportes",          sub: "Tiempo de ciclo, cumplimiento de entrega y distribución por rubro." },
   };
@@ -2294,6 +2559,7 @@ function ComprasApp({ session }) {
     { titulo: "Gestión", items: [
       { id: "nueva",         icon: "plus",    label: "Nueva requisición", count: 0 },
       { id: "proveedores",   icon: "factory", label: "Proveedores",       count: 0 },
+      { id: "catalogo",       icon: "list",   label: "Catálogo",          count: 0 },
       { id: "catalogo-xubio", icon: "box",    label: "Catálogo Xubio",    count: 0 },
       { id: "kpis",          icon: "chart",   label: "KPIs y reportes",   count: 0 },
     ]},
@@ -2401,6 +2667,7 @@ function ComprasApp({ session }) {
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-aprobacion"); loadCounts(); }} onCancel={() => setPage("inbox-aprobacion")} notify={notify} />}
             {page === "kpis" && <PageKPIs />}
             {page === "proveedores" && <PageProveedores notify={notify} />}
+            {page === "catalogo" && <PageCatalogo notify={notify} />}
             {page === "catalogo-xubio" && <PageCatalogoXubio notify={notify} />}
           </div>
         </div>
