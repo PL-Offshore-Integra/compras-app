@@ -101,6 +101,23 @@ const api = {
     const { data } = supabase.storage.from("cotizaciones").getPublicUrl(path);
     return data.publicUrl;
   },
+  // ── Catálogo Xubio (productos de compra espejados desde Xubio) ──
+  async getXubioProductos(empresa = "pl_offshore") {
+    const { data, error } = await supabase
+      .from("xubio_productos")
+      .select("*")
+      .eq("empresa", empresa)
+      .order("nombre");
+    if (error) throw error;
+    return data || [];
+  },
+  async syncXubioProductos(empresa = "pl_offshore") {
+    const { data, error } = await supabase.functions.invoke("sync-productos-xubio", {
+      body: { empresa },
+    });
+    if (error) throw error;
+    return data;
+  },
 };
 
 const CSS = `
@@ -1738,6 +1755,95 @@ function PageNueva({ onSaved, onCancel, notify }) {
 }
 
 // ─── PAGE: KPIs ──────────────────────────────────────────────────────────────
+function PageCatalogoXubio({ notify }) {
+  const [productos, setProductos] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [syncing, setSyncing]     = useState(false);
+  const [busca, setBusca]         = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProductos(await api.getXubioProductos("pl_offshore")); }
+    catch (e) { notify("Error al cargar: " + e.message, "error"); }
+    finally { setLoading(false); }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await api.syncXubioProductos("pl_offshore");
+      if (res?.error) throw new Error(res.error);
+      notify(`Sincronizados ${res?.sincronizados ?? 0} productos desde Xubio`, "success");
+      await load();
+    } catch (e) {
+      notify("Error al sincronizar: " + e.message, "error");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const filtrados = productos.filter(p => {
+    if (!busca.trim()) return true;
+    const t = busca.toLowerCase();
+    return (p.nombre || "").toLowerCase().includes(t) ||
+           (p.codigo || "").toLowerCase().includes(t);
+  });
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">
+          Productos de compra en Xubio (PL Offshore)
+          <button className="btn btn-primary btn-sm" onClick={handleSync} disabled={syncing}>
+            {syncing ? "Sincronizando…" : "Sincronizar desde Xubio"}
+          </button>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <input
+            type="search"
+            placeholder="Buscar por nombre o código…"
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            style={{
+              maxWidth: 320, width: "100%", height: 38, padding: "0 12px",
+              border: "1px solid var(--border, #C9D0D6)", borderRadius: 4,
+              font: "400 13px/1.2 'IBM Plex Sans', sans-serif", outline: "none",
+            }}
+          />
+          <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted)" }}>
+            {filtrados.length} de {productos.length} productos
+          </span>
+        </div>
+
+        {loading ? <div className="loading"><span className="spin">◌</span></div> :
+          <table>
+            <thead><tr><th>Nombre</th><th>Código</th><th>ID Xubio</th></tr></thead>
+            <tbody>
+              {filtrados.map(p => (
+                <tr key={p.xubio_id}>
+                  <td style={{ fontWeight: 600 }}>{p.nombre || "—"}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.codigo || "—"}</td>
+                  <td className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{p.xubio_id}</td>
+                </tr>
+              ))}
+              {!filtrados.length && (
+                <tr><td colSpan={3}><div className="empty-state">
+                  {productos.length === 0
+                    ? "Todavía no hay productos. Tocá \"Sincronizar desde Xubio\" para traerlos."
+                    : "Ningún producto coincide con la búsqueda."}
+                </div></td></tr>
+              )}
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+  );
+}
+
 function PageKPIs() {
   const [reqs, setReqs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2153,6 +2259,7 @@ function ComprasApp({ session }) {
     search:  <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
     bell:    <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
     help:    <><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.3c-.7.4-1.1 1-1.1 1.7v.3" /><path d="M12 17.5h.01" /></>,
+    box:     <><path d="M3.3 7L12 3l8.7 4v10L12 21 3.3 17z" /><path d="M3.3 7L12 11l8.7-4" /><path d="M12 11v10" /></>,
   };
 
   /* Título, bajada y grupo de cada pantalla. Un solo lugar que lo declara. */
@@ -2166,6 +2273,7 @@ function ComprasApp({ session }) {
     "archivo-rechazados":{ grupo: "Archivo",     titulo: "Rechazados",               sub: "Requisiciones rechazadas, con motivo y responsable de la decisión." },
     "nueva":             { grupo: "Gestión",     titulo: "Nueva requisición",        sub: "Los campos obligatorios definen el circuito de aprobación." },
     "proveedores":       { grupo: "Gestión",     titulo: "Proveedores",              sub: "Padrón habilitado, con rubro, condición fiscal y datos de contacto." },
+    "catalogo-xubio":    { grupo: "Gestión",     titulo: "Catálogo Xubio",           sub: "Productos de compra sincronizados desde Xubio. Xubio es la fuente de verdad; acá se ven en modo lectura." },
     "kpis":              { grupo: "Gestión",     titulo: "KPIs y reportes",          sub: "Tiempo de ciclo, cumplimiento de entrega y distribución por rubro." },
   };
 
@@ -2184,9 +2292,10 @@ function ComprasApp({ session }) {
       { id: "archivo-rechazados", icon: "x",     label: "Rechazados", count: 0 },
     ]},
     { titulo: "Gestión", items: [
-      { id: "nueva",       icon: "plus",    label: "Nueva requisición", count: 0 },
-      { id: "proveedores", icon: "factory", label: "Proveedores",       count: 0 },
-      { id: "kpis",        icon: "chart",   label: "KPIs y reportes",   count: 0 },
+      { id: "nueva",         icon: "plus",    label: "Nueva requisición", count: 0 },
+      { id: "proveedores",   icon: "factory", label: "Proveedores",       count: 0 },
+      { id: "catalogo-xubio", icon: "box",    label: "Catálogo Xubio",    count: 0 },
+      { id: "kpis",          icon: "chart",   label: "KPIs y reportes",   count: 0 },
     ]},
   ];
 
@@ -2292,6 +2401,7 @@ function ComprasApp({ session }) {
             {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-aprobacion"); loadCounts(); }} onCancel={() => setPage("inbox-aprobacion")} notify={notify} />}
             {page === "kpis" && <PageKPIs />}
             {page === "proveedores" && <PageProveedores notify={notify} />}
+            {page === "catalogo-xubio" && <PageCatalogoXubio notify={notify} />}
           </div>
         </div>
       </div>
