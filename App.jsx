@@ -1,0 +1,2732 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import * as XLSX from "xlsx";
+import {
+  BASES_POR_EMPRESA, AREAS_POR_EMPRESA, SUBAREA_TECNICA,
+  DETALLE_TECNICO, TIPOS_REQUISICION, URGENCIA_OPTIONS, PLAZO_PAGO_OPTIONS,
+  STATUS_LABELS, CATEGORIAS_RECHAZO
+} from "./lib/catalogos";
+import { supabase } from "./lib/supabase";
+
+const USUARIO = "Comprador"; // fallback — se sobreescribe con email real del session
+const getUsuario = (session) => session?.user?.email || USUARIO;
+const PORTAL_URL = "https://integra.ploffshore.com";
+const GRUPOS_OPCIONES = ["A", "B", "C", "D", "E"];
+
+const TRACKER_STATUS = {
+  en_cotizacion: { label: "En cotización", color: "b-amber" },
+  oc_emitida:    { label: "OC Emitida",    color: "b-blue" },
+  en_transito:   { label: "En tránsito",   color: "b-purple" },
+  entregado:     { label: "Entregado",     color: "b-green" },
+  archivado:     { label: "Archivado",     color: "b-gray" },
+};
+
+const fmt = (n, cur = "ARS") =>
+  n != null ? new Intl.NumberFormat("es-AR", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(n) : "—";
+const fmtDate = d => d ? new Date(d).toLocaleDateString("es-AR") : "—";
+const fmtDateTime = d => d ? new Date(d).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+
+const api = {
+  async getRequisiciones(filtros = {}) {
+    let q = supabase.from("requisiciones").select("*, requisicion_items(*), requisicion_historial(*)").order("created_at", { ascending: false });
+    if (filtros.status) q = q.eq("status", filtros.status);
+    if (filtros.empresa) q = q.eq("empresa", filtros.empresa);
+    if (filtros.statuses) q = q.in("status", filtros.statuses);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+  async getRequisicion(id) {
+    const { data, error } = await supabase.from("requisiciones").select("*, requisicion_items(*), requisicion_historial(*)").eq("id", id).single();
+    if (error) throw error;
+    return data;
+  },
+  async crearRequisicion(req, items) {
+    const { data: nueva, error } = await supabase.from("requisiciones").insert([{ ...req, status: "pendiente_aprobacion" }]).select().single();
+    if (error) throw error;
+    if (items?.length) await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: nueva.id, nro_linea: i + 1 })));
+    await supabase.from("requisicion_historial").insert([{ requisicion_id: nueva.id, evento: "Requisición creada", usuario: USUARIO, status_nuevo: "pendiente_aprobacion" }]);
+    return nueva;
+  },
+  async actualizarRequisicion(id, cambios, evento, detalle) {
+    const { data, error } = await supabase.from("requisiciones").update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (error) throw error;
+    if (evento) await supabase.from("requisicion_historial").insert([{ requisicion_id: id, evento, usuario: USUARIO, detalle, status_nuevo: cambios.status }]);
+    return data;
+  },
+  async actualizarItems(reqId, items) {
+    await supabase.from("requisicion_items").delete().eq("requisicion_id", reqId);
+    if (items?.length) await supabase.from("requisicion_items").insert(items.map((it, i) => ({ ...it, requisicion_id: reqId, nro_linea: i + 1 })));
+  },
+  async getTrackerLineas(filtros = {}) {
+    let q = supabase.from("tracker_lineas").select("*, requisiciones(id, nro_solicitud, titulo, empresa, base_buque, area, subarea, urgencia, solicitado_por, fecha_necesaria, tipo_requisicion, observaciones, created_at, updated_at)").order("created_at", { ascending: false });
+    if (filtros.status) q = q.eq("status", filtros.status);
+    if (filtros.statuses) q = q.in("status", filtros.statuses);
+    if (filtros.proveedor) q = q.eq("proveedor_elegido", filtros.proveedor);
+    if (filtros.requisicion_id) q = q.eq("requisicion_id", filtros.requisicion_id);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  },
+  async crearTrackerLineas(requisicionId, lineas) {
+    const { error } = await supabase.from("tracker_lineas").insert(lineas.map(l => ({ ...l, requisicion_id: requisicionId })));
+    if (error) throw error;
+  },
+  async actualizarTrackerLinea(id, cambios) {
+    const { data, error } = await supabase.from("tracker_lineas").update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async getProveedores() {
+    const { data, error } = await supabase.from("proveedores").select("*").eq("activo", true).order("nombre");
+    if (error) throw error;
+    return data || [];
+  },
+  async crearProveedor(prov) {
+    const { data, error } = await supabase.from("proveedores").insert([prov]).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async actualizarProveedor(id, cambios) {
+    const { data, error } = await supabase.from("proveedores").update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async eliminarProveedor(id) {
+    const { error } = await supabase.from("proveedores").update({ activo: false }).eq("id", id);
+    if (error) throw error;
+  },
+  async subirAdjunto(file, path) {
+    const { error } = await supabase.storage.from("cotizaciones").upload(path, file, { upsert: true });
+    if (error) throw error;
+    const { data } = supabase.storage.from("cotizaciones").getPublicUrl(path);
+    return data.publicUrl;
+  },
+  // ── Catálogo Xubio (productos de compra espejados desde Xubio) ──
+  async getXubioProductos(empresa = "pl_offshore") {
+    const { data, error } = await supabase
+      .from("xubio_productos")
+      .select("*")
+      .eq("empresa", empresa)
+      .order("nombre");
+    if (error) throw error;
+    return data || [];
+  },
+  async syncXubioProductos(empresa = "pl_offshore") {
+    const { data, error } = await supabase.functions.invoke("sync-productos-xubio", {
+      body: { empresa },
+    });
+    if (error) throw error;
+    return data;
+  },
+  // ── Catálogo de Compras (productos propios mapeados a Xubio) ──
+  async getCatalogoCompras(empresa = "pl_offshore") {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .select("*")
+      .eq("empresa", empresa)
+      .eq("activo", true)
+      .order("nombre");
+    if (error) throw error;
+    return data || [];
+  },
+  async crearProductoCatalogo(prod) {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .insert([prod])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  async actualizarProductoCatalogo(id, cambios) {
+    const { data, error } = await supabase
+      .from("catalogo_compras")
+      .update({ ...cambios, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  async eliminarProductoCatalogo(id) {
+    const { error } = await supabase
+      .from("catalogo_compras")
+      .update({ activo: false })
+      .eq("id", id);
+    if (error) throw error;
+  },
+};
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+/* ── TOKENS · INTEGRA Brand Book v1.0 ──────────────────────────────────────────
+   Los nombres de variable son los que ya usaba esta app: cambian los valores,
+   no los selectores. Navy = estructura, nunca acción. Un solo color de acción.
+   ──────────────────────────────────────────────────────────────────────────── */
+:root{
+  --navy:#082F4E;--blue:#056D76;--mid:#4A5560;--light:#C9D0D6;
+  --bg:#FAFBFC;--surface:#FFFFFF;--surface2:#F4F6F8;--surface3:#E4E8EC;
+  --border:#E4E8EC;--border2:#C9D0D6;
+  --text:#0F1419;--muted:#4A5560;--muted2:#7A8792;
+  --accent:#056D76;--accent2:#0E7A5F;--warn:#8F5A0B;--danger:#B3261E;
+  --purple:#4A5560;--teal:#056D76;--orange:#8F5A0B;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--r:4px;--r2:4px;
+  --nav:#082F4E;--action:#056D76;--action-press:#04565D;
+  --tr:color 120ms cubic-bezier(.2,0,.38,.9),background-color 120ms cubic-bezier(.2,0,.38,.9),border-color 120ms cubic-bezier(.2,0,.38,.9);
+}
+/* Instancia: se activa con <html data-instance="pl-offshore"> en index.html */
+[data-instance="pl-offshore"]{--nav:#002247;--action:#002247;--blue:#002247;--accent:#002247}
+[data-instance="clean-sea"]{--nav:#1B3765;--action:#006945;--blue:#006945;--accent:#006945}
+[data-instance="terramare"]{--nav:#213363;--action:#1F5285;--blue:#1F5285;--accent:#1F5285}
+
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;min-height:100vh;overflow-x:hidden}
+*:focus-visible{outline:2px solid var(--action);outline-offset:2px}
+.app{display:flex;min-height:100vh;overflow-x:hidden}
+
+/* ── NAVEGACIÓN LATERAL · 240px, colapsa a iconos en mobile ───────────────── */
+.sidebar{width:240px;min-width:240px;background:var(--nav);display:flex;flex-direction:column}
+.sidebar-header{border-bottom:1px solid rgba(255,255,255,.14)}
+.sidebar-logo-wrap{padding:14px 16px;display:flex;align-items:center;gap:12px;height:56px}
+.sidebar-logo-img{width:28px;height:28px;object-fit:contain;border-radius:var(--r);border:0;background:rgba(255,255,255,.14)}
+.sidebar-logo-main{font-size:14px;font-weight:600;color:#fff;letter-spacing:0;text-transform:none}
+.sidebar-logo-sub{font-family:var(--mono);font-size:11px;color:rgba(255,255,255,.72);margin-top:2px;letter-spacing:.06em;text-transform:uppercase}
+.nav-section{padding:16px 16px 6px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:rgba(255,255,255,.72);text-transform:uppercase}
+.ni{display:flex;align-items:center;gap:10px;padding:9px 16px;font-size:14px;font-weight:500;cursor:pointer;color:rgba(255,255,255,.72);border-left:3px solid transparent;transition:var(--tr);user-select:none;min-height:36px}
+.ni:hover{color:#fff;background:rgba(255,255,255,.08)}
+.ni.active{color:#fff;border-left-color:var(--action);background:rgba(255,255,255,.12);font-weight:500}
+.ni.sub{padding-left:34px;font-size:13px;font-weight:400}
+.ni.sub.active{font-weight:500}
+.ni.back{color:rgba(255,255,255,.72);font-size:13px;border-top:1px solid rgba(255,255,255,.14);margin-top:6px}
+.ni.back:hover{color:#fff}
+.ni-icon{font-size:14px;width:16px;text-align:center;flex-shrink:0}
+.ni-badge{margin-left:auto;background:rgba(255,255,255,.14);color:#fff;font-family:var(--mono);font-size:11px;font-weight:500;padding:2px 7px;border-radius:3px;min-width:20px;text-align:center}
+.ni-badge.amber{background:rgba(255,255,255,.14)}
+.ni-badge.gray{background:rgba(255,255,255,.14);color:rgba(255,255,255,.72)}
+
+/* ── BARRA SUPERIOR · 56px ────────────────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.topbar-title{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+.content{flex:1;overflow-y:auto;overflow-x:hidden;padding:24px;background:var(--bg)}
+
+/* ── PANELES · blancos, borde 1px, radio 4, sin sombra ────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:24px;margin-bottom:16px}
+.card-title{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+
+/* ── KPIs ─────────────────────────────────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:24px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px}
+.stat-label{font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.08em;margin-bottom:8px;text-transform:uppercase}
+.stat-value{font-family:var(--mono);font-size:30px;font-weight:600;color:var(--navy);font-variant-numeric:tabular-nums}
+.va{color:var(--navy)}.vg{color:var(--accent2)}.vr{color:var(--danger)}.vp{color:var(--muted)}.vm{color:var(--warn)}.vgr{color:var(--muted)}
+
+/* ── TABLAS · fila 40px, regla marcada de 2px navy, dato en mono ──────────── */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:2px solid var(--navy);white-space:nowrap;background:var(--surface)}
+td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr.click:hover td{background:var(--surface2);cursor:pointer}
+.tracker-table th{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;padding:10px 12px;text-align:left;border-bottom:2px solid var(--navy);white-space:nowrap;background:var(--surface);position:sticky;top:0;z-index:2}
+.tracker-table th.sortable{cursor:pointer;user-select:none}
+.tracker-table th.sortable:hover{color:var(--navy)}
+.tracker-table td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tracker-table tr:hover td{background:var(--surface2);cursor:pointer}
+.tracker-table tr:last-child td{border-bottom:none}
+
+/* ── FILTROS ──────────────────────────────────────────────────────────────── */
+.filter-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.filter-input,.filter-select{background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--sans);font-size:14px;height:36px;padding:0 10px;outline:none;min-width:150px;transition:var(--tr)}
+.filter-select{cursor:pointer}
+.filter-input:focus,.filter-select:focus{border-width:2px;border-color:var(--action);padding:0 9px}
+
+/* ── BADGES DE ESTADO · fondo tenue, texto de estado, mono caja alta ─────── */
+.badge{display:inline-flex;align-items:center;font-family:var(--mono);font-size:11px;font-weight:500;padding:3px 8px;border-radius:3px;white-space:nowrap;letter-spacing:.06em;text-transform:uppercase}
+.b-amber{background:#FBF1E3;color:#8F5A0B;border:0}
+.b-blue{background:#E6F1F2;color:#056D76;border:0}
+.b-teal{background:#E8F3EF;color:#0E7A5F;border:0}
+.b-red{background:#FAEAE8;color:#B3261E;border:0}
+.b-purple{background:#F4F6F8;color:#4A5560;border:0}
+.b-orange{background:#FBF1E3;color:#8F5A0B;border:0}
+.b-green{background:#E8F3EF;color:#0E7A5F;border:0}
+.b-gray{background:#F4F6F8;color:#4A5560;border:0}
+.urgdot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px;flex-shrink:0}
+
+/* ── BOTONES · un solo primario por vista. Nada se mueve al presionar ────── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--sans);font-size:14px;font-weight:500;letter-spacing:0;height:36px;padding:0 16px;border-radius:var(--r);border:1px solid transparent;cursor:pointer;transition:var(--tr);white-space:nowrap;text-transform:none}
+.btn-primary{background:var(--action);color:#fff}
+.btn-primary:hover{background:var(--navy)}
+.btn-primary:active{background:var(--action-press)}
+.btn-success{background:var(--accent2);color:#fff}
+.btn-success:hover{background:#0B6249}
+.btn-danger{background:var(--surface);color:var(--danger);border-color:var(--border2)}
+.btn-danger:hover{background:#FAEAE8;border-color:var(--danger)}
+.btn-ghost{background:var(--surface);color:var(--muted);border-color:var(--border2)}
+.btn-ghost:hover{color:var(--text);background:var(--surface2)}
+.btn-warn{background:var(--surface);color:var(--warn);border-color:var(--border2)}
+.btn-warn:hover{background:#FBF1E3;border-color:var(--warn)}
+.btn-cond{background:var(--surface);color:var(--muted);border-color:var(--border2)}
+.btn-cond:hover{background:var(--surface2)}
+.btn-confirm{background:var(--surface);color:var(--warn);border-color:var(--border2)}
+.btn-confirm:hover{background:#FBF1E3}
+.btn-sm{height:28px;padding:0 12px;font-size:13px}
+.btn:disabled{background:var(--surface3);color:var(--muted2);border-color:transparent;cursor:not-allowed}
+
+/* ── CAPAS FLOTANTES · la única sombra del sistema ───────────────────────── */
+.overlay{position:fixed;inset:0;background:rgba(15,20,25,.45);display:flex;align-items:flex-start;justify-content:center;z-index:100;padding:24px;overflow-y:auto}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);width:100%;max-width:860px;margin:auto;box-shadow:0 8px 24px rgba(15,20,25,.14)}
+.modal-lg{max-width:1120px}
+.mhdr{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px;border-bottom:1px solid var(--border);background:var(--surface);border-radius:var(--r) var(--r) 0 0}
+.mtitle{font-size:18px;font-weight:600;letter-spacing:0;color:var(--navy)}
+.mbody{padding:24px}
+.mftr{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;background:var(--surface2);border-radius:0 0 var(--r) var(--r)}
+.mclose{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;transition:var(--tr)}
+.mclose:hover{color:var(--navy)}
+@keyframes fadeIn{from{opacity:1}to{opacity:1}}
+@keyframes slideUp{from{opacity:1}to{opacity:1}}
+
+/* ── FORMULARIOS · campo 36px, foco borde 2px ────────────────────────────── */
+.fg{display:flex;flex-direction:column;gap:6px}
+.fg label{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+.fg input,.fg select,.fg textarea{background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--sans);font-size:14px;height:36px;padding:0 12px;outline:none;transition:var(--tr)}
+.fg textarea{resize:vertical;min-height:72px;height:auto;padding:10px 12px}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-width:2px;border-color:var(--action);padding:0 11px}
+.fg textarea:focus{padding:9px 11px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.form-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+.form-section{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:32px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.items-edit th{font-family:var(--mono);font-size:11px;background:var(--surface)}
+.items-edit td{padding:6px 8px}
+.items-edit input,.items-edit select{background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--mono);font-size:13px;height:32px;padding:0 8px;width:100%;outline:none;transition:var(--tr)}
+.items-edit input:focus,.items-edit select:focus{border-width:2px;border-color:var(--action);padding:0 7px}
+
+/* ── TRAZABILIDAD ────────────────────────────────────────────────────────── */
+.tl{list-style:none}
+.tl-item{display:flex;gap:12px;padding-bottom:16px;position:relative}
+.tl-item:not(:last-child)::before{content:'';position:absolute;left:11px;top:24px;bottom:0;width:1px;background:var(--border)}
+.tl-dot{width:24px;height:24px;border-radius:50%;background:var(--surface2);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;z-index:1}
+.tl-dot.c{border-color:var(--action);color:var(--action);background:#E6F1F2}
+.tl-dot.a{border-color:var(--accent2);color:var(--accent2);background:#E8F3EF}
+.tl-dot.r{border-color:var(--danger);color:var(--danger);background:#FAEAE8}
+.tl-dot.u{border-color:var(--warn);color:var(--warn);background:#FBF1E3}
+.tl-ev{font-size:14px;font-weight:500;color:var(--navy)}
+.tl-meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+
+/* ── FILA DE REQUISICIÓN · el estado va en el borde izquierdo de 3px ────── */
+.req-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;cursor:pointer;transition:var(--tr)}
+.req-row:hover{border-color:var(--navy)}
+.req-row.unread{border-left:3px solid var(--action)}
+.req-row.devuelto{border-left:3px solid var(--warn)}
+.req-row.pend-confirm{border-left:3px solid var(--warn)}
+.req-title{font-weight:600;font-size:15px;margin-bottom:6px;color:var(--navy)}
+.req-meta{display:flex;gap:16px;font-size:13px;color:var(--muted);flex-wrap:wrap;align-items:center}
+
+/* ── AVISOS ──────────────────────────────────────────────────────────────── */
+.notif{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-left-width:3px;border-radius:var(--r);padding:14px 16px;font-size:14px;z-index:300;max-width:360px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(15,20,25,.14)}
+.n-green{border-left-color:var(--accent2)}.n-red{border-left-color:var(--danger)}.n-amber{border-left-color:var(--warn)}.n-blue{border-left-color:var(--action)}
+.info-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;font-size:14px}
+.info-box.accent{border-left:3px solid var(--action)}
+.info-box.warn{border-left:3px solid var(--warn)}
+.info-box.danger{border-left:3px solid var(--danger)}
+.info-box.orange{border-left:3px solid var(--warn)}
+
+/* ── UTILIDADES ──────────────────────────────────────────────────────────── */
+.flex-gap{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.flex-between{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
+.mb8{margin-bottom:8px}.mb12{margin-bottom:12px}.mb16{margin-bottom:16px}
+.text-mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.text-muted{color:var(--muted)}
+.empty-state{text-align:center;padding:48px 24px;color:var(--muted);font-size:15px}
+.loading{display:flex;align-items:center;justify-content:center;padding:48px;color:var(--muted);gap:12px;font-size:15px}
+.spin{animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.kbar{margin-bottom:12px}
+.kbar-lbl{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}
+.kbar-track{height:6px;background:var(--surface3);border-radius:3px;overflow:hidden;border:0}
+.kbar-fill{height:100%;border-radius:3px}
+.tabs-row{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:24px;overflow-x:auto}
+.tab{font-size:14px;font-weight:500;padding:10px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:var(--tr);text-transform:none;letter-spacing:0;margin-bottom:-1px;white-space:nowrap}
+.tab:hover{color:var(--navy)}
+.tab.active{color:var(--action);border-bottom-color:var(--action)}
+.grupo-chip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:3px;font-family:var(--mono);font-size:12px;font-weight:500;background:var(--surface2);color:var(--navy);border:1px solid var(--border);flex-shrink:0}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;padding:3px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.fecha-chip{display:inline-flex;flex-direction:column;gap:2px;font-family:var(--mono);font-size:11px;color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums}
+.fecha-chip span:first-child{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.tracker-simple-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+.tracker-simple-row.en-curso{border-left:3px solid var(--warn)}
+.tracker-simple-row.entregado{border-left:3px solid var(--accent2)}
+.req-row-actions{display:flex;flex-direction:row;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);justify-content:flex-end}
+.cotiz-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:16px}
+
+/* ── MOBILE ──────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app { flex-direction: column; }
+  .sidebar { display: none; }
+  .main { width: 100%; padding-bottom: 72px; }
+  .topbar { padding: 0 16px; }
+  .content { padding: 16px; }
+  .card { padding: 16px; margin-bottom: 12px; }
+  .stats { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat { padding: 14px; }
+  .stat-value { font-size: 24px; }
+  .form-grid, .form-grid-3 { grid-template-columns: 1fr; gap: 12px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { font-size: 13px; min-width: 540px; }
+  th, td { padding: 10px 8px; }
+  .tracker-table th, .tracker-table td { padding: 10px 8px; }
+  .filter-row { flex-direction: column; align-items: stretch; }
+  .filter-input, .filter-select { min-width: unset; width: 100%; }
+  .btn { height: 44px; padding: 0 14px; }
+  .btn-sm { height: 36px; }
+  .mftr { flex-wrap: wrap; gap: 8px; }
+  .mftr .btn { flex: 1; justify-content: center; }
+  .overlay { padding: 0; align-items: flex-end; }
+  .modal { border-radius: var(--r) var(--r) 0 0; max-width: 100%; max-height: 92vh; overflow-y: auto; }
+  .modal-lg { max-width: 100%; }
+  .req-meta { gap: 10px; }
+  .req-title { font-size: 15px; }
+  .tabs-row { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tab { font-size: 13px; padding: 10px 12px; }
+  .notif { bottom: 88px; right: 12px; left: 12px; max-width: unset; }
+  .items-edit { font-size: 13px; }
+  .items-edit th, .items-edit td { padding: 6px; }
+  .items-edit table { min-width: 380px; }
+  .req-row-actions{flex-direction:column;gap:8px;width:100%}
+  .req-row-actions .btn{width:100%}
+  .mftr{flex-direction:column;align-items:stretch;gap:8px}
+  .mftr .btn{width:100%;flex:unset}
+  .mftr .btn-success{order:-3}.mftr .btn-primary{order:-2}.mftr .btn-danger{order:-1}
+  .card-title{flex-direction:column;align-items:flex-start;gap:10px}
+  .card-title .btn{width:100%}
+  .filter-row .btn{width:100%}
+  .form-footer-actions{flex-direction:column !important;align-items:stretch !important}
+  .form-footer-actions .btn{width:100%}
+  .cotiz-grid{grid-template-columns:1fr !important}
+  .req-row .flex-between{flex-direction:column;align-items:flex-start;gap:10px}
+  .req-row .flex-between > .flex-gap:last-child{width:100%;flex-direction:column;gap:8px}
+  .req-row .flex-between > .flex-gap:last-child .btn{width:100%}
+}
+
+/* ── NAVEGACIÓN INFERIOR (solo mobile) ───────────────────────────────────── */
+@media (max-width: 768px) {
+  .mobile-nav {
+    display: flex !important;
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--nav); border-top: 1px solid rgba(255,255,255,.14);
+    z-index: 50; height: 64px;
+    justify-content: space-around; align-items: center;
+    padding: 0 4px; overflow-x: auto;
+  }
+  .mobile-nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    cursor: pointer; padding: 8px; border-radius: var(--r);
+    color: rgba(255,255,255,.72); transition: var(--tr); flex: 1;
+    position: relative; min-width: 48px; min-height: 48px; justify-content: center;
+  }
+  .mobile-nav-item.active { color: #fff; background: rgba(255,255,255,.12); }
+  .mobile-nav-item:hover { color: #fff; }
+  .mobile-nav-icon { font-size: 16px; line-height: 1; }
+  .mobile-nav-label { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; text-align: center; }
+  .mobile-nav-badge {
+    position: absolute; top: 4px; right: 8px;
+    background: rgba(255,255,255,.14); color: #fff;
+    font-family: var(--mono); font-size: 10px; font-weight: 500;
+    padding: 1px 5px; border-radius: 3px; min-width: 16px; text-align: center;
+  }
+  .mobile-nav-badge.amber { background: rgba(255,255,255,.14); }
+  .mobile-nav-badge.gray { background: rgba(255,255,255,.14); }
+}
+@media (min-width: 769px) {
+  .mobile-nav { display: none !important; }
+}
+
+/* ══ ARMAZÓN · shell del prototipo ═══════════════════════════════════════════
+   La navegación del módulo es BLANCA con borde derecho; el navy es la barra
+   superior. El ítem activo lleva borde izquierdo de 3px en el color de acción.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);align-items:stretch;min-height:100vh}
+.shell.is-collapsed{grid-template-columns:68px minmax(0,1fr)}
+
+.appbar{height:56px;background:var(--nav);display:flex;align-items:center;gap:24px;padding:0 24px;flex:0 0 auto}
+.appbar-iso{height:26px;width:auto;object-fit:contain;display:block;flex:0 0 auto}
+.appbar-div{width:1px;height:24px;background:rgba(255,255,255,.14);flex:0 0 auto}
+.appbar-instance{font:500 14px/1.2 var(--sans);color:#fff;white-space:nowrap;flex:0 0 auto}
+.appbar-search{flex:1;max-width:380px;display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;background:rgba(255,255,255,.10);border:0;border-radius:var(--r);font:400 14px/1.2 var(--sans);color:rgba(255,255,255,.72)}
+.appbar-search::placeholder{color:rgba(255,255,255,.72)}
+.appbar-tools{margin-left:auto;display:flex;align-items:center;gap:16px}
+.appbar-avatar{width:28px;height:28px;border-radius:var(--r);background:rgba(255,255,255,.14);color:#fff;font-family:var(--mono);font-size:12px;font-weight:500;line-height:28px;text-align:center;flex:0 0 auto}
+.appbar-user{font:500 13px/1.25 var(--sans);color:#fff;white-space:nowrap}
+.appbar-link{background:none;border:0;padding:0;cursor:pointer;font:500 13px/1.2 var(--sans);color:rgba(255,255,255,.86);white-space:nowrap}
+.appbar-link:hover{color:#fff;text-decoration:underline}
+
+.sidebar{width:auto;min-width:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sidebar-header{border-bottom:1px solid var(--border);padding:16px;display:flex;align-items:center;gap:12px;min-height:69px}
+.sidebar-logo-img{width:32px;height:32px;object-fit:contain;border:0;border-radius:0;background:none;flex:0 0 auto}
+.sidebar-logo-main{font:600 15px/1.3 var(--sans);color:var(--navy);letter-spacing:0;text-transform:none}
+.sidebar-logo-sub{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-section{padding:14px 16px 8px;font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;text-align:left}
+.ni{display:flex;align-items:center;gap:12px;width:100%;padding:9px 16px 9px 13px;background:transparent;border:0;border-left:3px solid transparent;cursor:pointer;text-align:left;font:400 14px/1.3 var(--sans);color:var(--muted);transition:var(--tr);min-height:38px}
+.ni:hover{background:var(--surface2);color:var(--navy)}
+.ni.active{background:var(--surface2);border-left-color:var(--action);color:var(--navy);font-weight:500}
+.ni-ico{display:block;flex:0 0 auto;color:var(--muted2)}
+.ni.active .ni-ico{color:var(--action)}
+.ni-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ni-badge{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);background:var(--surface2);padding:3px 6px;border-radius:3px;min-width:22px;text-align:center;border:1px solid var(--border)}
+.ni.active .ni-badge{color:var(--action);background:var(--surface);border-color:var(--border2)}
+.ni-badge.amber{color:var(--warn)}
+.ni-badge.gray{color:var(--muted)}
+.sidebar-foot{border-top:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
+.sidebar-foot-btn{display:flex;align-items:center;gap:12px;width:100%;padding:9px 10px;background:none;border:0;border-radius:var(--r);cursor:pointer;font:500 13px/1.2 var(--sans);color:var(--muted);transition:var(--tr)}
+.sidebar-foot-btn:hover{background:var(--surface2);color:var(--navy)}
+.sidebar-foot-meta{padding:8px 10px 0;font-family:var(--mono);font-size:11px;font-weight:500;line-height:1.6;letter-spacing:.06em;color:var(--muted2)}
+.shell.is-collapsed .sidebar-header{justify-content:center;padding:16px 8px}
+.shell.is-collapsed .ni{justify-content:center;padding:9px 8px 9px 5px}
+.shell.is-collapsed .sidebar-foot-btn{justify-content:center}
+
+/* ── encabezado de pantalla ───────────────────────────────────────────────── */
+.pagehead{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;flex:0 0 auto}
+.crumb{display:flex;align-items:center;gap:8px;font:400 13px/1.2 var(--sans);color:var(--muted)}
+.crumb button{background:none;border:0;padding:0;cursor:pointer;font:400 13px/1.2 var(--sans);color:var(--action)}
+.crumb button:hover{text-decoration:underline;color:var(--navy)}
+.crumb-current{color:var(--text)}
+.pagehead-row{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-top:10px}
+.pagehead h1{font:600 24px/1.25 var(--sans);color:var(--navy);margin:0}
+.pagehead p{font:400 13px/1.45 var(--sans);color:var(--muted);margin:6px 0 0;max-width:70ch}
+.pagehead-actions{display:flex;gap:8px;flex:0 0 auto}
+
+@media (max-width:768px){
+  .shell,.shell.is-collapsed{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .appbar{gap:12px;padding:0 16px}
+  .appbar-search,.appbar-instance{display:none}
+  .pagehead{padding:14px 16px}
+  .pagehead-row{flex-direction:column;align-items:stretch;gap:12px}
+  .pagehead-actions .btn{flex:1}
+  .main{padding-bottom:72px}
+}
+
+`;
+
+function Notif({ msg, onClose }) {
+  if (!msg) return null;
+  const cls = { success: "n-green", error: "n-red", warn: "n-amber", info: "n-blue" }[msg.type] || "n-blue";
+  return <div className={`notif ${cls}`}><span>{msg.text}</span><button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}>✕</button></div>;
+}
+
+function UrgBadge({ urgencia }) {
+  const color = { Critica: "b-red", Alta: "b-amber", Normal: "b-green" }[urgencia] || "b-gray";
+  return <span className={`badge ${color}`}><span className="urgdot" style={{ background: { Critica: "var(--danger)", Alta: "var(--warn)", Normal: "var(--accent2)" }[urgencia] }} />{urgencia}</span>;
+}
+
+function TrackerBadge({ status }) {
+  const s = TRACKER_STATUS[status] || { label: status, color: "b-gray" };
+  return <span className={`badge ${s.color}`}>{s.label}</span>;
+}
+
+function StatusBadge({ status }) {
+  const colorMap = {
+    pendiente_aprobacion: "b-amber", aprobado_cotizar: "b-blue",
+    en_cotizacion: "b-teal", pendiente_confirmacion: "b-orange",
+    aprobado: "b-green", rechazado: "b-red", en_compra: "b-purple",
+    entregado: "b-green", cerrado: "b-gray",
+  };
+  return <span className={`badge ${colorMap[status] || "b-gray"}`}>{STATUS_LABELS[status] || status}</span>;
+}
+
+function FG({ label, hint, children, full }) {
+  return <div className="fg" style={full ? { gridColumn: "1/-1" } : {}}>
+    {label && <label>{label}</label>}
+    {children}
+    {hint && <div style={{ fontSize: 10, color: "var(--muted2)", marginTop: 2 }}>{hint}</div>}
+  </div>;
+}
+
+function FechaChip({ label, fecha }) {
+  if (!fecha) return <div className="fecha-chip"><span>{label}</span><span style={{ color: "var(--muted2)" }}>—</span></div>;
+  return <div className="fecha-chip"><span>{label}</span><span>{fmtDateTime(fecha)}</span></div>;
+}
+
+function Timeline({ historial }) {
+  if (!historial?.length) return <div style={{ fontSize: 11, color: "var(--muted)" }}>Sin historial</div>;
+  const icon = ev => {
+    if (ev.includes("creada")) return { i: "◎", c: "c" };
+    if (ev.includes("probado") || ev.includes("OC") || ev.includes("Compra")) return { i: "✓", c: "a" };
+    if (ev.includes("echazado") || ev.includes("evuelto")) return { i: "✗", c: "r" };
+    return { i: "·", c: "u" };
+  };
+  return <ul className="tl">{[...historial].sort((a, b) => new Date(a.fecha || a.created_at) - new Date(b.fecha || b.created_at)).map((h, i) => {
+    const { i: ic, c } = icon(h.evento);
+    return <li key={i} className="tl-item">
+      <div className={`tl-dot ${c}`}>{ic}</div>
+      <div><div className="tl-ev">{h.evento}</div><div className="tl-meta">{fmtDateTime(h.fecha || h.created_at)} · {h.usuario}{h.detalle ? ` · ${h.detalle}` : ""}</div></div>
+    </li>;
+  })}</ul>;
+}
+
+// ─── MODAL: APROBAR (aprobador) — con consolidar grupos ───────────────────────
+function AprobarModal({ req, onClose, onSave }) {
+  const items = req.requisicion_items || [];
+  const [asignaciones, setAsignaciones] = useState(items.map(() => "A"));
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+  const grupos = [...new Set(asignaciones)].sort();
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Crear líneas en el tracker automáticamente
+      const lineas = grupos.map(g => {
+        const itemsGrupo = items.filter((_, i) => asignaciones[i] === g);
+        return {
+          grupo: g,
+          descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")} — ${req.titulo}`,
+          items_detalle: itemsGrupo,
+          status: "en_cotizacion",
+          fecha_solicitud: req.created_at,
+          fecha_aprobacion: new Date().toISOString(),
+        };
+      });
+      await api.crearTrackerLineas(req.id, lineas);
+      await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_aprobacion: new Date().toISOString() }, `Aprobado para cotizar — ${grupos.length} grupo${grupos.length > 1 ? "s" : ""}${nota ? ` · ${nota}` : ""}`, nota || null);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="mhdr">
+          <div><div className="mtitle">APROBAR Y CONSOLIDAR EN TRACKER</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div></div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          <div className="info-box accent mb12" style={{ fontSize: 11 }}>
+            Asigná cada ítem a un grupo. Ítems del mismo grupo se consolidan en una línea del Tracker para cotizar juntos.
+          </div>
+          <table className="items-edit">
+            <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo tracker</th></tr></thead>
+            <tbody>
+              {items.map((it, i) => <tr key={i}>
+                <td>{it.descripcion}</td>
+                <td className="text-mono">{it.cantidad} {it.unidad}</td>
+                <td><select value={asignaciones[i]} onChange={e => { const a = [...asignaciones]; a[i] = e.target.value; setAsignaciones(a); }} style={{ width: 60 }}>{GRUPOS_OPCIONES.map(g => <option key={g}>{g}</option>)}</select></td>
+              </tr>)}
+            </tbody>
+          </table>
+          <div className="mt12"><div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {grupos.map(g => {
+              const n = items.filter((_, i) => asignaciones[i] === g).length;
+              return <div key={g} className="flex-gap"><div className="grupo-chip">{g}</div><span style={{ fontSize: 11, color: "var(--muted)" }}>{n} ítem{n > 1 ? "s" : ""}</span></div>;
+            })}
+          </div></div>
+          <FG label="Nota para el comprador (opcional)"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: Verificar disponibilidad antes de cotizar..." /></FG>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : `Aprobar Tracker (${grupos.length} línea${grupos.length > 1 ? "s" : ""})`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: APROBAR CONDICIONAL (aprobador edita ítems primero) ───────────────
+function AprobarCondicionalModal({ req, onClose, onSave }) {
+  const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "" });
+  const [items, setItems] = useState(req.requisicion_items?.length ? req.requisicion_items.map(it => ({ ...it })) : [blank()]);
+  const [asignaciones, setAsignaciones] = useState((req.requisicion_items || [blank()]).map(() => "A"));
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState(1); // 1: editar items, 2: agrupar
+  const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
+
+  const handleSave = async () => {
+    const itemsValidos = items.filter(it => it.descripcion?.trim());
+    setSaving(true);
+    try {
+      await api.actualizarItems(req.id, itemsValidos.map(({ id: _id, requisicion_id: _rid, nro_linea: _nl, ...rest }) => rest));
+      const grupos = [...new Set(asignaciones.slice(0, itemsValidos.length))].sort();
+      const lineas = grupos.map(g => ({
+        grupo: g,
+        descripcion: `Grupo ${g} — REQ-${String(req.nro_solicitud).padStart(4, "0")} — ${req.titulo}`,
+        items_detalle: itemsValidos.filter((_, i) => asignaciones[i] === g),
+        status: "en_cotizacion",
+        fecha_solicitud: req.created_at,
+        fecha_aprobacion: new Date().toISOString(),
+      }));
+      await api.crearTrackerLineas(req.id, lineas);
+      await api.actualizarRequisicion(req.id, { status: "aprobado_cotizar", revisado_por: USUARIO, fecha_aprobacion: new Date().toISOString() }, `Aprobado con modificaciones${nota ? ` — ${nota}` : ""}`, nota || null);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="mhdr">
+          <div><div className="mtitle">APROBAR CON MODIFICACIONES</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div></div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          {step === 1 && <>
+            <div className="info-box warn mb12" style={{ fontSize: 11 }}>Paso 1: Editá los ítems antes de aprobar.</div>
+            <div className="table-wrap">
+              <table className="items-edit">
+                <thead><tr><th style={{ width: "35%" }}>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th><th></th></tr></thead>
+                <tbody>
+                  {items.map((it, i) => <tr key={it.id || i}>
+                    <td><input value={it.descripcion || ""} onChange={e => setItem(i, "descripcion", e.target.value)} /></td>
+                    <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
+                    <td><input value={it.unidad || ""} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 55 }} /></td>
+                    <td><input value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)} /></td>
+                    <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+            <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>Agregar ítem</button>
+            <FG label="Nota para el comprador (opcional)" full><textarea value={nota} onChange={e => setNota(e.target.value)} style={{ marginTop: 8 }} /></FG>
+          </>}
+          {step === 2 && <>
+            <div className="info-box accent mb12" style={{ fontSize: 11 }}>Paso 2: Agrupá los ítems para el tracker.</div>
+            <table className="items-edit">
+              <thead><tr><th style={{ width: "50%" }}>Ítem</th><th>Cant.</th><th>Grupo</th></tr></thead>
+              <tbody>
+                {items.filter(it => it.descripcion?.trim()).map((it, i) => <tr key={i}>
+                  <td>{it.descripcion}</td>
+                  <td className="text-mono">{it.cantidad} {it.unidad}</td>
+                  <td><select value={asignaciones[i] || "A"} onChange={e => { const a = [...asignaciones]; a[i] = e.target.value; setAsignaciones(a); }} style={{ width: 60 }}>{GRUPOS_OPCIONES.map(g => <option key={g}>{g}</option>)}</select></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </>}
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          {step === 1 && <button className="btn btn-primary" onClick={() => setStep(2)} disabled={!items.some(it => it.descripcion?.trim())}>Siguiente → Agrupar</button>}
+          {step === 2 && <>
+            <button className="btn btn-ghost" onClick={() => setStep(1)}>← Volver</button>
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? "Aprobando..." : "Aprobar con cambios → Tracker"}</button>
+          </>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: RECHAZAR ─────────────────────────────────────────────────────────
+function RechazarModal({ req, onClose, onSave }) {
+  const [categoria, setCategoria] = useState("");
+  const [texto, setTexto] = useState("");
+  const [devolver, setDevolver] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!categoria) return alert("Seleccioná una categoría");
+    setSaving(true);
+    try {
+      const updated = await api.actualizarRequisicion(req.id, {
+        status: devolver ? "pendiente_aprobacion" : "rechazado",
+        motivo_rechazo_categoria: categoria, motivo_rechazo_texto: texto,
+        veces_devuelto: (req.veces_devuelto || 0) + 1,
+      }, devolver ? `Devuelta — ${categoria}` : `Rechazada — ${categoria}`, texto || null);
+      onSave(updated, devolver);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="mhdr"><div className="mtitle">RECHAZAR / DEVOLVER</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="mbody">
+          <FG label="Motivo *"><select value={categoria} onChange={e => setCategoria(e.target.value)}><option value="">Seleccionar...</option>{CATEGORIAS_RECHAZO.map(c => <option key={c}>{c}</option>)}</select></FG>
+          <div className="mt12"><FG label="Detalle adicional"><textarea value={texto} onChange={e => setTexto(e.target.value)} /></FG></div>
+          <div className="mt12" style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px" }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 10 }}>
+              <input type="radio" checked={devolver} onChange={() => setDevolver(true)} style={{ marginTop: 2, accentColor: "var(--warn)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--warn)" }}>Devolver para corrección</div></div>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+              <input type="radio" checked={!devolver} onChange={() => setDevolver(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>✕ Rechazar definitivamente</div></div>
+            </label>
+          </div>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className={`btn ${devolver ? "btn-warn" : "btn-danger"}`} onClick={handleSave} disabled={saving || !categoria}>{saving ? "..." : devolver ? "Devolver" : "✕ Rechazar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: VER REQ (solo lectura con historial) ──────────────────────────────
+function ReqDetalleModal({ req, onClose }) {
+  const [tab, setTab] = useState("detalle");
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="mhdr">
+          <div>
+            <div className="mtitle">REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>
+            <div className="flex-gap mt8"><StatusBadge status={req.status} /><UrgBadge urgencia={req.urgencia} /><span className="tag">{req.base_buque}</span><span className="tag">{req.area}</span></div>
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody" style={{ paddingBottom: 0 }}>
+          <div className="tabs-row">{["detalle", "historial"].map(t => <div key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "detalle" ? "Detalle" : "Historial"}</div>)}</div>
+          {tab === "detalle" && <>
+            <div className="form-grid mb12">
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SOLICITANTE</div>{req.solicitado_por}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>FECHA NECESARIA</div>{fmtDate(req.fecha_necesaria) || "—"}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>TIPO</div>{req.tipo_requisicion || "—"}</div>
+              <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>SUB-ÁREA</div>{req.subarea || "—"}</div>
+            </div>
+            {req.observaciones && <div className="info-box mb12">{req.observaciones}</div>}
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Descripción</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th></tr></thead>
+                <tbody>{(req.requisicion_items || []).map((it, i) => <tr key={i}><td className="text-mono text-muted">{it.nro_linea}</td><td>{it.descripcion}</td><td className="text-mono">{it.cantidad}</td><td className="text-muted">{it.unidad}</td><td className="text-muted">{it.proveedor_sugerido || "—"}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </>}
+          {tab === "historial" && <Timeline historial={req.requisicion_historial} />}
+        </div>
+        <div className="mftr"><button className="btn btn-ghost" onClick={onClose}>Cerrar</button></div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: COTIZAR Y COMPRAR (comprador) ─────────────────────────────────────
+function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirmacion, usuarioEmail }) {
+  const emptyCotiz = () => ({ proveedor: "", precio: "", moneda: "ARS", plazo: "" });
+  const initCotiz = () => { const c = linea.cotizaciones || {}; return [c.c1 || emptyCotiz(), c.c2 || emptyCotiz(), c.c3 || emptyCotiz()]; };
+  const [form, setForm] = useState({
+    descripcion: linea.descripcion || "", proveedor_elegido: linea.proveedor_elegido || "",
+    motivo_proveedor: linea.motivo_proveedor || "", nro_oc: linea.nro_oc || "",
+    costo_real: linea.costo_real || "", moneda_real: linea.moneda_real || "ARS",
+    plazo_pago: linea.plazo_pago || "", fecha_entrega_prom: linea.fecha_entrega_prom || "",
+    fecha_entrega_real: linea.fecha_entrega_real || "", status: linea.status || "en_cotizacion",
+    notas: linea.notas || "", nro_remito: linea.nro_remito || "",
+    nota_confirmacion: linea.nota_confirmacion || "",
+  });
+  const [cotiz, setCotiz] = useState(initCotiz());
+  const blankItem = () => ({ descripcion: "", cantidad: 1, unidad: "Uni" });
+  const [itemsEdit, setItemsEdit] = useState(
+    (linea.items_detalle || []).length > 0
+      ? linea.items_detalle.map(it => ({ ...it }))
+      : []
+  );
+  const [adjuntos, setAdjuntos] = useState(linea.cotizaciones?.adjuntos || []);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+  const [showLog, setShowLog] = useState(true);
+  const fileRef = useRef();
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setCotizField = (idx, k, v) => {
+    const next = cotiz.map((c, i) => i === idx ? { ...c, [k]: v } : c);
+    setCotiz(next);
+    if (idx === 0) {
+      if (k === "proveedor") set("proveedor_elegido", v);
+      if (k === "precio") set("costo_real", v);
+      if (k === "moneda") set("moneda_real", v);
+      if (k === "plazo") set("plazo_pago", v);
+    }
+  };
+
+  // ── Generador de diff ────────────────────────────────────────────────────────
+  const buildDiff = (payload) => {
+    const LABELS = {
+      descripcion: "Descripción", proveedor_elegido: "Proveedor elegido",
+      nro_oc: "N° OC", costo_real: "Costo real", moneda_real: "Moneda",
+      plazo_pago: "Plazo pago", fecha_entrega_prom: "Entrega prometida",
+      fecha_entrega_real: "Entrega real", status: "Estado",
+      notas: "Notas", nro_remito: "N° Remito", motivo_proveedor: "Motivo proveedor",
+    };
+    const cambios = [];
+    for (const [k, label] of Object.entries(LABELS)) {
+      const antes = linea[k] ?? "";
+      const despues = payload[k] ?? "";
+      if (String(antes) !== String(despues) && !(antes === "" && despues === null)) {
+        cambios.push({ campo: label, antes: antes || "—", despues: despues || "—" });
+      }
+    }
+    // Diff cotizaciones
+    const c0orig = linea.cotizaciones?.c1 || emptyCotiz();
+    const c0new  = cotiz[0];
+    if (c0orig.proveedor !== c0new.proveedor) cambios.push({ campo: "Cotiz. 1 — Proveedor", antes: c0orig.proveedor || "—", despues: c0new.proveedor || "—" });
+    if (String(c0orig.precio || "") !== String(c0new.precio || "")) cambios.push({ campo: "Cotiz. 1 — Precio", antes: c0orig.precio || "—", despues: c0new.precio || "—" });
+    // Diff ítems
+    const itemsOrig = JSON.stringify(linea.items_detalle || []);
+    const itemsNew  = JSON.stringify(itemsEdit.filter(it => it.descripcion?.trim()));
+    if (itemsOrig !== itemsNew) cambios.push({ campo: "Ítems del pedido", antes: "ver versión anterior", despues: "actualizado" });
+    return cambios;
+  };
+
+  const buildPayload = (overrides = {}) => {
+    const f = { ...form, ...overrides };
+    return {
+      descripcion: f.descripcion || null, proveedor_elegido: f.proveedor_elegido || null,
+      motivo_proveedor: f.motivo_proveedor || null, nro_oc: f.nro_oc || null,
+      costo_real: f.costo_real !== "" && f.costo_real != null ? parseFloat(f.costo_real) : null,
+      moneda_real: f.moneda_real || "ARS", plazo_pago: f.plazo_pago || null,
+      fecha_entrega_prom: f.fecha_entrega_prom || null, fecha_entrega_real: f.fecha_entrega_real || null,
+      status: f.status, notas: f.notas || null, nro_remito: f.nro_remito || null,
+      nota_confirmacion: f.nota_confirmacion || null,
+      cotizaciones: { c1: cotiz[0], c2: cotiz[1], c3: cotiz[2], adjuntos },
+      items_detalle: itemsEdit.filter(it => it.descripcion?.trim()),
+    };
+  };
+
+  // Construye el payload + appends log entry si hay cambios
+  // Nota: cambios_log se omite del payload de DB si la columna no existe en tracker_lineas
+  const buildPayloadConLog = (overrides = {}) => {
+    const payload = buildPayload(overrides);
+    const diff = buildDiff(payload);
+    const logsExistentes = linea.cambios_log || [];
+    const nuevaEntrada = {
+      ts: new Date().toISOString(),
+      usuario: usuarioEmail || USUARIO,
+      accion: overrides.status === "oc_emitida" ? "OC emitida" : overrides.status === "entregado" ? "Entrega confirmada" : overrides.status === "pendiente_confirmacion" ? "Solicitó confirmación de valor" : "Guardado manual",
+      cambios: diff,
+    };
+    // cambios_log omitido: la columna no existe aún en tracker_lineas.
+    // Para activarlo: agregar columna cambios_log (jsonb) en Supabase y usar:
+    // return { ...payload, cambios_log: [...logsExistentes, nuevaEntrada] };
+    return payload;
+  };
+
+  const handleGuardar = async () => {
+    setSaving(true);
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog())); }
+    catch (e) { alert("Error: " + e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleComprar = async () => {
+    if (!form.proveedor_elegido) return alert("Seleccioná el proveedor elegido antes de comprar");
+    setSaving(true);
+    try {
+      onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "oc_emitida", fecha_compra: new Date().toISOString() })));
+    } catch (e) { alert("Error: " + e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleConfirmarEntrega = async () => {
+    setSaving(true);
+    try { onSave(await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "entregado", fecha_entrega_real: form.fecha_entrega_real || new Date().toISOString().split("T")[0], fecha_entrega_ts: new Date().toISOString() }))); }
+    catch (e) { alert("Error."); }
+    finally { setSaving(false); }
+  };
+
+  const handleSolicitarConf = async () => {
+    if (!form.costo_real) return alert("Ingresá el valor cotizado antes de solicitar confirmación");
+    setSaving(true);
+    try {
+      await api.actualizarTrackerLinea(linea.id, buildPayloadConLog({ status: "pendiente_confirmacion" }));
+      onSolicitarConfirmacion({ ...linea, ...buildPayload({ status: "pendiente_confirmacion" }) });
+    } catch (e) { alert("Error."); }
+    finally { setSaving(false); }
+  };
+
+  const handleUpload = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      const nuevos = [];
+      for (const file of Array.from(files)) {
+        const path = `${linea.id}/${Date.now()}_${file.name}`;
+        const url = await api.subirAdjunto(file, path);
+        nuevos.push({ nombre: file.name, url, path });
+      }
+      setAdjuntos(prev => [...prev, ...nuevos]);
+    } catch (e) { alert("Error al subir."); }
+    finally { setUploading(false); }
+  };
+
+  const req = linea.requisiciones;
+  const esConfirmacionPendiente = linea.status === "pendiente_confirmacion";
+
+  const COTIZ_STYLES = [
+    { border: "2px solid var(--accent2)", background: "#F0FDF4" },
+    { border: "1px solid var(--border)", background: "var(--surface2)" },
+    { border: "1px solid var(--border)", background: "var(--surface2)" },
+  ];
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="mhdr">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="flex-gap" style={{ marginBottom: 6 }}>
+              <div className="grupo-chip">{linea.grupo}</div>
+              <div className="mtitle">REQ-{req ? String(req.nro_solicitud).padStart(4, "0") : "—"}</div>
+            </div>
+            {req && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>{req.base_buque} · {req.area}{req.subarea ? ` › ${req.subarea}` : ""}</div>}
+            <input
+              value={form.descripcion}
+              onChange={e => set("descripcion", e.target.value)}
+              style={{ width: "100%", fontSize: 14, fontWeight: 700, color: "var(--navy)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px", fontFamily: "var(--sans)", background: "var(--surface)", outline: "none" }}
+              placeholder="Descripción de la línea..."
+            />
+          </div>
+          <button className="mclose" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          {esConfirmacionPendiente && <div className="info-box orange mb12" style={{ fontSize: 12 }}>Esta línea está esperando confirmación de valor por parte del aprobador.</div>}
+
+          {itemsEdit.length > 0 && <div className="mb12">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowDetail(!showDetail)}>{showDetail ? "▲" : "▼"} Ver ítems ({itemsEdit.length})</button>
+            {showDetail && (
+              <div style={{ marginTop: 8 }}>
+                <table className="items-edit">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "55%" }}>Descripción</th>
+                      <th style={{ width: "15%" }}>Cant.</th>
+                      <th style={{ width: "15%" }}>Unidad</th>
+                      <th style={{ width: "15%" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsEdit.map((it, i) => (
+                      <tr key={i}>
+                        <td><input value={it.descripcion || ""} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], descripcion: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td><input type="number" min="0" value={it.cantidad ?? 1} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], cantidad: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td><input value={it.unidad || ""} onChange={e => { const next = [...itemsEdit]; next[i] = { ...next[i], unidad: e.target.value }; setItemsEdit(next); }} style={{ width: "100%", fontSize: 12 }} /></td>
+                        <td style={{ textAlign: "center" }}><button onClick={() => setItemsEdit(prev => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer", fontSize: 14 }}>✕</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} onClick={() => setItemsEdit(prev => [...prev, blankItem()])}>Agregar ítem</button>
+              </div>
+            )}
+          </div>}
+
+          <div className="form-section">Cotizaciones</div>
+          <div className="cotiz-grid">
+            {cotiz.map((c, i) => (
+              <div key={i} style={{ borderRadius: "var(--r2)", padding: "12px 14px", ...COTIZ_STYLES[i] }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: i === 0 ? "var(--accent2)" : "var(--muted)", marginBottom: 10 }}>{i === 0 && ""}{["Cotización elegida", "Cotización 2", "Cotización 3"][i]}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <FG label="Proveedor"><select value={c.proveedor} onChange={e => setCotizField(i, "proveedor", e.target.value)} style={{ fontSize: 12 }}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
+                  <FG label="Precio"><input type="number" value={c.precio} onChange={e => setCotizField(i, "precio", e.target.value)} style={{ fontSize: 12 }} /></FG>
+                  <FG label="Moneda"><select value={c.moneda} onChange={e => setCotizField(i, "moneda", e.target.value)} style={{ fontSize: 12 }}><option>ARS</option><option>USD</option></select></FG>
+                  <FG label="Plazo"><select value={c.plazo} onChange={e => setCotizField(i, "plazo", e.target.value)} style={{ fontSize: 12 }}><option value="">—</option>{PLAZO_PAGO_OPTIONS.map(p => <option key={p}>{p}</option>)}</select></FG>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="form-section">Proveedor elegido y OC</div>
+          <div className="form-grid">
+            <FG label="Proveedor elegido *"><select value={form.proveedor_elegido} onChange={e => set("proveedor_elegido", e.target.value)}><option value="">Seleccionar...</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></FG>
+            <FG label="N° OC"><input value={form.nro_oc} onChange={e => set("nro_oc", e.target.value)} placeholder="OC-0001" /></FG>
+          </div>
+          <div className="form-grid">
+            <FG label="Estado"><select value={form.status} onChange={e => set("status", e.target.value)}>
+              <option value="en_cotizacion">En cotización</option>
+              <option value="pendiente_confirmacion">Pendiente confirmación</option>
+              <option value="oc_emitida">OC emitida</option>
+              <option value="en_transito">En tránsito</option>
+              <option value="entregado">Entregado</option>
+              <option value="archivado">Archivado</option>
+            </select></FG>
+            <FG label="¿Por qué este proveedor?"><textarea value={form.motivo_proveedor} onChange={e => set("motivo_proveedor", e.target.value)} style={{ minHeight: 38 }} /></FG>
+          </div>
+
+          <div className="form-section">Precio y entrega</div>
+          <div className="form-grid-3">
+            <FG label="Costo real"><input type="number" value={form.costo_real} onChange={e => set("costo_real", e.target.value)} /></FG>
+            <FG label="Moneda"><select value={form.moneda_real} onChange={e => set("moneda_real", e.target.value)}><option>ARS</option><option>USD</option></select></FG>
+            <FG label="Plazo de pago"><select value={form.plazo_pago} onChange={e => set("plazo_pago", e.target.value)}><option value="">—</option>{PLAZO_PAGO_OPTIONS.map(p => <option key={p}>{p}</option>)}</select></FG>
+            <FG label="Entrega prometida"><input type="date" value={form.fecha_entrega_prom} onChange={e => set("fecha_entrega_prom", e.target.value)} /></FG>
+            <FG label="Entrega real"><input type="date" value={form.fecha_entrega_real} onChange={e => set("fecha_entrega_real", e.target.value)} /></FG>
+            <FG label="N° Remito"><input value={form.nro_remito} onChange={e => set("nro_remito", e.target.value)} placeholder="0001-00001234" /></FG>
+          </div>
+
+          {/* Campo nota para confirmación de valor */}
+          <FG label="Nota para el aprobador (si solicita confirmación de valor)">
+            <textarea value={form.nota_confirmacion} onChange={e => set("nota_confirmacion", e.target.value)} placeholder="Ej: El precio es USD 1.200, mayor al habitual. ¿Autorizamos?" />
+          </FG>
+          <FG label="Notas internas"><textarea value={form.notas} onChange={e => set("notas", e.target.value)} /></FG>
+
+          <div className="form-section">Adjuntos</div>
+          <input ref={fileRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style={{ display: "none" }} onChange={e => handleUpload(e.target.files)} />
+          <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current.click()} disabled={uploading}>Adjuntar presupuesto o remito</button>
+          {adjuntos.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+            {adjuntos.map((adj, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px" }}>
+                <span></span>
+                <a href={adj.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", flex: 1 }}>{adj.nombre}</a>
+                <button onClick={async () => { await supabase.storage.from("cotizaciones").remove([adj.path]); setAdjuntos(prev => prev.filter(a => a.path !== adj.path)); }} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer" }}>✕</button>
+              </div>
+            ))}
+          </div>}
+
+          {/* ── Log de cambios ─────────────────────────────────────────── */}
+          {(() => {
+            const log = linea.cambios_log || [];
+            if (log.length === 0) return null;
+            const ACCION_COLOR = {
+              "OC emitida": { bg: "#DBEAFE", color: "#1E40AF", icon: "" },
+              "Entrega confirmada": { bg: "#D1FAE5", color: "#065F46", icon: "" },
+              "Solicitó confirmación de valor": { bg: "#FEF3C7", color: "#92400E", icon: "" },
+              "Guardado manual": { bg: "#F3F4F6", color: "#374151", icon: "" },
+            };
+            return (
+              <div style={{ marginTop: 20 }}>
+                <div className="form-section" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setShowLog(v => !v)}>
+                  <span>Log de cambios ({log.length})</span>
+                  <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>{showLog ? "Ocultar" : "Ver"}</span>
+                </div>
+                {showLog && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {[...log].reverse().map((entrada, i) => {
+                      const style = ACCION_COLOR[entrada.accion] || ACCION_COLOR["Guardado manual"];
+                      const ts = new Date(entrada.ts);
+                      const fechaStr = ts.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+                      const horaStr  = ts.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+                      // Determinar "rol" del usuario para etiquetarlo
+                      const esComprador = entrada.usuario && (entrada.usuario.includes("compra") || entrada.usuario.includes("admin") || !entrada.usuario.includes("@"));
+                      return (
+                        <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--r2)", overflow: "hidden" }}>
+                          {/* Header de la entrada */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: style.bg }}>
+                            <span style={{ fontSize: 16 }}>{style.icon}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: style.color }}>{entrada.accion}</span>
+                                <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted)", background: "rgba(0,0,0,.05)", padding: "1px 6px", borderRadius: 4 }}>
+                                  {entrada.usuario}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, fontFamily: "var(--mono)" }}>
+                                {fechaStr} {horaStr}
+                              </div>
+                            </div>
+                          </div>
+                          {/* Diff de campos */}
+                          {entrada.cambios?.length > 0 ? (
+                            <div style={{ padding: "8px 12px", background: "var(--surface)", display: "flex", flexDirection: "column", gap: 6 }}>
+                              {entrada.cambios.map((c, j) => (
+                                <div key={j} style={{ display: "grid", gridTemplateColumns: "130px 1fr auto 1fr", gap: "4px 8px", alignItems: "start", fontSize: 11 }}>
+                                  <div style={{ color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".3px", fontSize: 10, paddingTop: 2 }}>{c.campo}</div>
+                                  <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "2px 7px", color: "#991B1B", fontFamily: "var(--mono)", wordBreak: "break-word" }}>
+                                    <span style={{ fontSize: 9, marginRight: 4, opacity: .7 }}>ANTES</span>{String(c.antes)}
+                                  </div>
+                                  <div style={{ color: "var(--muted2)", fontSize: 14, alignSelf: "center" }}>→</div>
+                                  <div style={{ background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "2px 7px", color: "#065F46", fontFamily: "var(--mono)", wordBreak: "break-word" }}>
+                                    <span style={{ fontSize: 9, marginRight: 4, opacity: .7 }}>AHORA</span>{String(c.despues)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ padding: "6px 12px", fontSize: 11, color: "var(--muted)", background: "var(--surface)", fontStyle: "italic" }}>Sin cambios de datos en esta acción</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: "var(--danger)" }}
+            disabled={saving}
+            onClick={async () => {
+              if (!confirm("¿Eliminar esta línea del tracker?")) return;
+              try {
+                await supabase.from("tracker_lineas").delete().eq("id", linea.id);
+                onSave({ ...linea, _deleted: true });
+              } catch(e) { alert("Error: " + e.message); }
+            }}
+          >
+            Eliminar línea
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleGuardar} disabled={saving}>Guardar</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleConfirmarEntrega} disabled={saving}>Confirmar entrega</button>
+            <button className="btn btn-confirm btn-sm" onClick={handleSolicitarConf} disabled={saving || esConfirmacionPendiente} title="Mandar al aprobador para que confirme el valor antes de comprar">Solicitar confirmación de valor</button>
+            <button className="btn btn-success" onClick={handleComprar} disabled={saving || esConfirmacionPendiente}>{saving ? "..." : "Comprar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL: CONFIRMAR VALOR (aprobador) ───────────────────────────────────────
+function ConfirmarValorModal({ linea, onClose, onSave }) {
+  const [aprobado, setAprobado] = useState(true);
+  const [nota, setNota] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const nuevoStatus = aprobado ? "oc_emitida" : "en_cotizacion";
+      await api.actualizarTrackerLinea(linea.id, {
+        status: nuevoStatus,
+        nota_confirmacion_respuesta: nota || null,
+        fecha_compra: aprobado ? new Date().toISOString() : null,
+      });
+      // También actualizar la requisición si corresponde
+      if (linea.requisiciones?.id) {
+        await api.actualizarRequisicion(linea.requisiciones.id, { status: aprobado ? "aprobado" : "aprobado_cotizar" }, aprobado ? `Valor confirmado — compra autorizada${nota ? ` · ${nota}` : ""}` : `Valor rechazado — vuelve a cotizar${nota ? ` · ${nota}` : ""}`, nota || null);
+      }
+      onSave();
+    } finally { setSaving(false); }
+  };
+
+  const req = linea.requisiciones;
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 560 }}>
+        <div className="mhdr"><div className="mtitle">CONFIRMAR VALOR</div><button className="mclose" onClick={onClose}>✕</button></div>
+        <div className="mbody">
+          <div className="info-box orange mb12" style={{ fontSize: 12 }}>El comprador solicita confirmación del valor cotizado antes de emitir la OC.</div>
+          {req && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>REQ-{String(req.nro_solicitud).padStart(4, "0")} — {req.titulo}</div>}
+          <div className="form-grid mb12">
+            <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>PROVEEDOR</div>{linea.proveedor_elegido || "—"}</div>
+            <div className="info-box"><div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 4 }}>VALOR COTIZADO</div><strong>{linea.costo_real ? fmt(linea.costo_real, linea.moneda_real) : "—"}</strong></div>
+          </div>
+          {linea.nota_confirmacion && <div className="info-box warn mb12" style={{ fontSize: 12 }}><strong>Nota del comprador:</strong> {linea.nota_confirmacion}</div>}
+          {linea.motivo_proveedor && <div className="info-box mb12" style={{ fontSize: 12 }}><strong>Justificación:</strong> {linea.motivo_proveedor}</div>}
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "12px 14px", marginBottom: 14 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
+              <input type="radio" checked={aprobado} onChange={() => setAprobado(true)} style={{ marginTop: 2, accentColor: "var(--accent2)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent2)" }}>Autorizar compra</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor es aceptable. El comprador puede emitir la OC.</div></div>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+              <input type="radio" checked={!aprobado} onChange={() => setAprobado(false)} style={{ marginTop: 2, accentColor: "var(--danger)" }} />
+              <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--danger)" }}>Volver a cotizar</div><div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>El valor no es aceptable. El comprador debe buscar alternativas.</div></div>
+            </label>
+          </div>
+          <FG label="Comentario para el comprador"><textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Explicación adicional..." /></FG>
+        </div>
+        <div className="mftr">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className={`btn ${aprobado ? "btn-success" : "btn-danger"}`} onClick={handleSave} disabled={saving}>{saving ? "..." : aprobado ? "Autorizar compra" : "Volver a cotizar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGE: INBOX APROBACIÓN ───────────────────────────────────────────────────
+function PageInboxAprobacion({ notify, onNeedRefresh }) {
+  const [reqs, setReqs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [aprobando, setAprobando] = useState(null);
+  const [aprobandoCond, setAprobandoCond] = useState(null);
+  const [rechazando, setRechazando] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setReqs(await api.getRequisiciones({ empresa: "Parana Logistica", statuses: ["pendiente_aprobacion"] })); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAprobado = () => { setAprobando(null); setAprobandoCond(null); notify("Aprobada y enviada al tracker", "success"); load(); onNeedRefresh(); };
+  const handleRechazado = (updated, devolver) => {
+    setRechazando(null);
+    if (devolver) { setReqs(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r)); notify("Devuelta al solicitante", "warn"); }
+    else { setReqs(prev => prev.filter(r => r.id !== updated.id)); notify("Rechazada definitivamente", "warn"); }
+    onNeedRefresh();
+  };
+
+  return (
+    <div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        reqs.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin requisiciones pendientes</div> :
+        reqs.map(r => (
+          <div key={r.id} className={`req-row ${r.veces_devuelto > 0 ? "devuelto" : "unread"}`}>
+            {/* INFO: siempre visible primero */}
+            <div className="flex-gap mb8" onClick={() => setSelected(r)} style={{ cursor: "pointer", flexWrap: "wrap" }}>
+              <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span>
+              <UrgBadge urgencia={r.urgencia} />
+              {r.veces_devuelto > 0 && <span className="badge b-orange">{r.veces_devuelto}x</span>}
+            </div>
+            <div className="req-title" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>{r.titulo}</div>
+            <div className="req-meta" onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
+              <span>{r.base_buque}</span><span>·</span>
+              <span>{r.area}{r.subarea ? ` › ${r.subarea}` : ""}</span><span>·</span>
+              <span>{r.solicitado_por}</span>
+              {r.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Nec: {fmtDate(r.fecha_necesaria)}</span></>}
+            </div>
+            {/* ACCIONES: debajo del contenido, full-width en mobile */}
+            <div className="req-row-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => setAprobando(r)}>Aprobar</button>
+              <button className="btn btn-cond btn-sm" onClick={() => setAprobandoCond(r)}>Aprob. condicional</button>
+              <button className="btn btn-danger btn-sm" onClick={() => setRechazando(r)}>Rechazar</button>
+            </div>
+          </div>
+        ))
+      }
+      {selected && <ReqDetalleModal req={selected} onClose={() => setSelected(null)} />}
+      {aprobando && <AprobarModal req={aprobando} onClose={() => setAprobando(null)} onSave={handleAprobado} />}
+      {aprobandoCond && <AprobarCondicionalModal req={aprobandoCond} onClose={() => setAprobandoCond(null)} onSave={handleAprobado} />}
+      {rechazando && <RechazarModal req={rechazando} onClose={() => setRechazando(null)} onSave={handleRechazado} />}
+    </div>
+  );
+}
+
+// ─── PAGE: PARA COTIZAR (comprador ve líneas del tracker) ─────────────────────
+function PageParaCotizar({ notify, onNeedRefresh, usuarioEmail }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [confirmandoValor, setConfirmandoValor] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion"] }),
+        api.getProveedores()
+      ]);
+      setLineas(data); setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = (updated) => {
+    setSelected(null);
+    notify("Guardado", "success");
+    load(); onNeedRefresh();
+  };
+
+  const handleSolicitarConfirmacion = async (linea) => {
+    setSelected(null);
+    await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" });
+    notify("Solicitud de confirmación de valor enviada al aprobador", "info");
+    load(); onNeedRefresh();
+  };
+
+  return (
+    <div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin líneas para cotizar</div> :
+        lineas.map(l => {
+          const req = l.requisiciones;
+          const esPendConf = l.status === "pendiente_confirmacion";
+          return (
+            <div key={l.id} className={`req-row ${esPendConf ? "pend-confirm" : "unread"}`} onClick={() => setSelected(l)}>
+              <div className="flex-between mb8">
+                <div className="flex-gap">
+                  <div className="grupo-chip">{l.grupo}</div>
+                  {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
+                  <TrackerBadge status={l.status} />
+                </div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{req?.base_buque}</span>
+              </div>
+              <div className="req-title">{l.descripcion}</div>
+              <div className="req-meta">
+                {req?.solicitado_por && <span>{req.solicitado_por}</span>}
+                {l.proveedor_elegido && <><span>·</span><span>{l.proveedor_elegido}</span></>}
+                {l.costo_real && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)" }}>{fmt(l.costo_real, l.moneda_real)}</span></>}
+                {req?.fecha_necesaria && <><span>·</span><span style={{ color: "var(--warn)" }}>Nec: {fmtDate(req.fecha_necesaria)}</span></>}
+                {esPendConf && <span style={{ color: "var(--orange)", fontWeight: 600 }}>· Esperando conf. de valor</span>}
+              </div>
+            </div>
+          );
+        })
+      }
+
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={handleSolicitarConfirmacion} usuarioEmail={usuarioEmail} />}
+      {confirmandoValor && <ConfirmarValorModal linea={confirmandoValor} onClose={() => setConfirmandoValor(null)} onSave={() => { setConfirmandoValor(null); notify("Confirmación enviada", "success"); load(); onNeedRefresh(); }} />}
+    </div>
+  );
+}
+
+// ─── PAGE: CONFIRMACIÓN DE VALOR (aprobador) ──────────────────────────────────
+function PageConfirmacion({ notify, onNeedRefresh, usuarioEmail }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([api.getTrackerLineas({ status: "pendiente_confirmacion" }), api.getProveedores()]);
+      setLineas(data); setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin confirmaciones pendientes</div> :
+        lineas.map(l => {
+          const req = l.requisiciones;
+          return (
+            <div key={l.id} className="req-row pend-confirm" onClick={() => setSelected(l)}>
+              <div className="flex-between mb8">
+                <div className="flex-gap"><div className="grupo-chip">{l.grupo}</div>{req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}<span className="badge b-orange">Conf. pendiente</span></div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{req?.base_buque}</span>
+              </div>
+              <div className="req-title">{l.descripcion}</div>
+              <div className="req-meta">
+                {l.proveedor_elegido && <span>{l.proveedor_elegido}</span>}
+                {l.costo_real && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)", fontWeight: 700 }}>{fmt(l.costo_real, l.moneda_real)}</span></>}
+                {l.nota_confirmacion && <><span>·</span><span style={{ fontStyle: "italic" }}>"{l.nota_confirmacion.slice(0, 60)}{l.nota_confirmacion.length > 60 ? "..." : ""}"</span></>}
+              </div>
+            </div>
+          );
+        })
+      }
+      {selected && <ConfirmarValorModal linea={selected} onClose={() => setSelected(null)} onSave={() => { setSelected(null); notify("Confirmación procesada", "success"); load(); onNeedRefresh(); }} />}
+    </div>
+  );
+}
+
+// ─── PAGE: TRACKER GENERAL ────────────────────────────────────────────────────
+function PageTrackerGeneral({ notify, onNeedRefresh, usuarioEmail }) {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+  const [filtros, setFiltros] = useState({ status: "", proveedor: "", busqueda: "" });
+  const [sortCol, setSortCol] = useState("created_at");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [data, provs] = await Promise.all([
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito", "entregado"] }),
+        api.getProveedores()
+      ]);
+      setLineas(data); setProveedores(provs);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = (updated) => {
+    setSelected(null);
+    if (updated?._deleted) {
+      setLineas(prev => prev.filter(l => l.id !== updated.id));
+      notify("Línea eliminada", "warn");
+    } else {
+      notify("Línea actualizada", "success");
+      load();
+    }
+    onNeedRefresh?.();
+  };
+  const handleSort = (col) => { if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortCol(col); setSortDir("asc"); } };
+
+  const lineasFiltradas = lineas.filter(l => {
+    const req = l.requisiciones;
+    if (filtros.status && l.status !== filtros.status) return false;
+    if (filtros.proveedor && l.proveedor_elegido !== filtros.proveedor) return false;
+    if (filtros.busqueda) {
+      const q = filtros.busqueda.toLowerCase();
+      if (!(l.descripcion?.toLowerCase().includes(q) || req?.nro_solicitud?.toString().includes(q) || req?.base_buque?.toLowerCase().includes(q) || l.proveedor_elegido?.toLowerCase().includes(q) || l.nro_oc?.toLowerCase().includes(q))) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    let va, vb;
+    const ra = a.requisiciones, rb = b.requisiciones;
+    switch (sortCol) {
+      case "nro": va = ra?.nro_solicitud || 0; vb = rb?.nro_solicitud || 0; break;
+      case "buque": va = ra?.base_buque || ""; vb = rb?.base_buque || ""; break;
+      case "proveedor": va = a.proveedor_elegido || ""; vb = b.proveedor_elegido || ""; break;
+      case "costo": va = a.costo_real || 0; vb = b.costo_real || 0; break;
+      case "entrega": va = a.fecha_entrega_prom || ""; vb = b.fecha_entrega_prom || ""; break;
+      default: va = a.created_at || ""; vb = b.created_at || "";
+    }
+    const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  const SortIcon = ({ col }) => sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : " ·";
+  const proveedoresDisponibles = [...new Set(lineas.map(l => l.proveedor_elegido).filter(Boolean))];
+  const totalARS = lineas.filter(l => l.costo_real && (l.moneda_real === "ARS" || !l.moneda_real)).reduce((a, l) => a + l.costo_real, 0);
+  const totalUSD = lineas.filter(l => l.costo_real && l.moneda_real === "USD").reduce((a, l) => a + l.costo_real, 0);
+
+  const handleExport = () => {
+    const rows = lineasFiltradas.map(l => {
+      const req = l.requisiciones;
+      return {
+        "REQ": req ? `REQ-${String(req.nro_solicitud).padStart(4, "0")}` : "",
+        "Grupo": l.grupo || "", "Descripción": l.descripcion || "",
+        "Base/Buque": req?.base_buque || "", "Área": req?.area || "",
+        "Sub-área": req?.subarea || "", "Solicitante": req?.solicitado_por || "",
+        "Urgencia": req?.urgencia || "", "Estado": TRACKER_STATUS[l.status]?.label || l.status || "",
+        "Proveedor": l.proveedor_elegido || "", "N° OC": l.nro_oc || "",
+        "Costo real": l.costo_real || "", "Moneda": l.moneda_real || "",
+        "Plazo pago": l.plazo_pago || "", "N° Remito": l.nro_remito || "",
+        "Fecha solicitud": l.fecha_solicitud ? fmtDateTime(l.fecha_solicitud) : "",
+        "Fecha aprobación": l.fecha_aprobacion ? fmtDateTime(l.fecha_aprobacion) : "",
+        "Fecha compra (OC)": l.fecha_compra ? fmtDateTime(l.fecha_compra) : "",
+        "Entrega prometida": l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : "",
+        "Entrega real": l.fecha_entrega_real ? fmtDate(l.fecha_entrega_real) : "",
+        "Notas": l.notas || "",
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Tracker");
+    XLSX.writeFile(wb, `tracker_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  return (
+    <div>
+      <div className="stats">
+        <div className="stat"><div className="stat-label">Total líneas</div><div className="stat-value va">{lineas.length}</div></div>
+        <div className="stat"><div className="stat-label">En curso</div><div className="stat-value vm">{lineas.filter(l => ["en_cotizacion", "oc_emitida", "en_transito"].includes(l.status)).length}</div></div>
+        <div className="stat"><div className="stat-label">Entregadas</div><div className="stat-value vg">{lineas.filter(l => l.status === "entregado").length}</div></div>
+        <div className="stat">
+          <div className="stat-label">Comprometido</div>
+          <div style={{ marginTop: 4 }}>
+            {totalARS > 0 && <div className="text-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>{fmt(totalARS, "ARS")}</div>}
+            {totalUSD > 0 && <div className="text-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--accent2)" }}>{fmt(totalUSD, "USD")}</div>}
+            {totalARS === 0 && totalUSD === 0 && <div style={{ color: "var(--muted2)", fontSize: 12 }}>—</div>}
+          </div>
+        </div>
+      </div>
+
+      <div className="filter-row">
+        <input className="filter-input" placeholder="Buscar..." value={filtros.busqueda} onChange={e => setFiltros(f => ({ ...f, busqueda: e.target.value }))} />
+        <select className="filter-select" value={filtros.status} onChange={e => setFiltros(f => ({ ...f, status: e.target.value }))}>
+          <option value="">Todos los estados</option>
+          {Object.entries(TRACKER_STATUS).filter(([k]) => k !== "archivado").map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <select className="filter-select" value={filtros.proveedor} onChange={e => setFiltros(f => ({ ...f, proveedor: e.target.value }))}>
+          <option value="">Todos los proveedores</option>
+          {proveedoresDisponibles.map(p => <option key={p}>{p}</option>)}
+        </select>
+        {(filtros.status || filtros.proveedor || filtros.busqueda) && <button className="btn btn-ghost btn-sm" onClick={() => setFiltros({ status: "", proveedor: "", busqueda: "" })}>✕ Limpiar</button>}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{lineasFiltradas.length} / {lineas.length}</span>
+          <button className="btn btn-ghost btn-sm" onClick={handleExport}>↓ Excel</button>
+        </div>
+      </div>
+
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        lineas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin líneas</div> :
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="tracker-table">
+              <thead>
+                <tr>
+                  <th className="sortable" onClick={() => handleSort("nro")}>REQ<SortIcon col="nro" /></th>
+                  <th>Descripción</th>
+                  <th className="sortable" onClick={() => handleSort("buque")}>Base/Buque<SortIcon col="buque" /></th>
+                  <th>Urgencia</th>
+                  <th>Estado</th>
+                  <th className="sortable" onClick={() => handleSort("proveedor")}>Proveedor<SortIcon col="proveedor" /></th>
+                  <th>OC</th>
+                  <th>Remito</th>
+                  <th className="sortable" onClick={() => handleSort("costo")}>Costo<SortIcon col="costo" /></th>
+                  <th>Fechas</th>
+                  <th className="sortable" onClick={() => handleSort("entrega")}>Entrega<SortIcon col="entrega" /></th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineasFiltradas.length === 0
+                  ? <tr><td colSpan={11} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>Sin resultados</td></tr>
+                  : lineasFiltradas.map(l => {
+                      const req = l.requisiciones;
+                      return (
+                        <tr key={l.id} onClick={() => setSelected(l)}>
+                          <td><div className="flex-gap"><div className="grupo-chip">{l.grupo}</div>{req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}</div></td>
+                          <td><div style={{ fontWeight: 600, fontSize: 12, maxWidth: 180 }}>{l.descripcion}</div></td>
+                          <td style={{ fontSize: 12, color: "var(--muted)" }}>{req?.base_buque || "—"}</td>
+                          <td>{req ? <UrgBadge urgencia={req.urgencia} /> : "—"}</td>
+                          <td><TrackerBadge status={l.status} /></td>
+                          <td style={{ fontSize: 12 }}>{l.proveedor_elegido || <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                          <td>{l.nro_oc ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                          <td>{l.nro_remito ? <span className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_remito}</span> : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                          <td className="text-mono" style={{ fontSize: 12 }}>{l.costo_real ? fmt(l.costo_real, l.moneda_real) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                              <FechaChip label="Solicitud" fecha={l.fecha_solicitud || req?.created_at} />
+                              <FechaChip label="Aprobación" fecha={l.fecha_aprobacion} />
+                              {l.fecha_compra && <FechaChip label="Compra" fecha={l.fecha_compra} />}
+                              {l.fecha_entrega_ts && <FechaChip label="Entrega" fecha={l.fecha_entrega_ts} />}
+                            </div>
+                          </td>
+                          <td style={{ fontSize: 12, color: "var(--warn)" }}>{l.fecha_entrega_prom ? fmtDate(l.fecha_entrega_prom) : <span style={{ color: "var(--muted2)" }}>—</span>}</td>
+                        </tr>
+                      );
+                    })
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={handleSave} onSolicitarConfirmacion={async (linea) => { setSelected(null); await api.actualizarTrackerLinea(linea.id, { status: "pendiente_confirmacion" }); notify("Confirmación de valor solicitada", "info"); load(); onNeedRefresh?.(); }} usuarioEmail={usuarioEmail} />}
+    </div>
+  );
+}
+
+// ─── PAGE: TRACKER SIMPLIFICADO ───────────────────────────────────────────────
+function PageTrackerSimple() {
+  const [lineas, setLineas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filtroBase, setFiltroBase] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => {
+    api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito", "entregado"] }).then(d => { setLineas(d); setLoading(false); });
+  }, []);
+
+  const bases = [...new Set(lineas.map(l => l.requisiciones?.base_buque).filter(Boolean))].sort();
+  const filtradas = lineas.filter(l => {
+    const req = l.requisiciones;
+    if (filtroBase && req?.base_buque !== filtroBase) return false;
+    if (busqueda && !l.descripcion?.toLowerCase().includes(busqueda.toLowerCase()) && !req?.nro_solicitud?.toString().includes(busqueda)) return false;
+    return true;
+  });
+
+  return (
+    <div>
+      <div className="info-box accent mb16" style={{ fontSize: 11 }}>Vista de seguimiento — estado de pedidos sin valores ni cotizaciones.</div>
+      <div className="filter-row">
+        <input className="filter-input" placeholder="Buscar..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+        <select className="filter-select" value={filtroBase} onChange={e => setFiltroBase(e.target.value)}>
+          <option value="">Todos los barcos</option>
+          {bases.map(b => <option key={b}>{b}</option>)}
+        </select>
+        {(filtroBase || busqueda) && <button className="btn btn-ghost btn-sm" onClick={() => { setFiltroBase(""); setBusqueda(""); }}>✕</button>}
+        <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{filtradas.length} pedidos</span>
+      </div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        filtradas.length === 0 ? <div className="empty-state"><div style={{ fontSize: 28, marginBottom: 8 }}></div>Sin pedidos</div> :
+        filtradas.map(l => {
+          const req = l.requisiciones;
+          const entregado = l.status === "entregado";
+          return (
+            <div key={l.id} className={`tracker-simple-row ${entregado ? "entregado" : "en-curso"}`}>
+              <div className="flex-between mb8">
+                <div className="flex-gap">
+                  {req && <span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(req.nro_solicitud).padStart(4, "0")}</span>}
+                  <TrackerBadge status={l.status} />
+                </div>
+                <span style={{ fontSize: 10, color: "var(--muted)" }}>{req?.base_buque}</span>
+              </div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--navy)", marginBottom: 4 }}>{l.descripcion}</div>
+              <div className="req-meta">
+                {req?.solicitado_por && <span>{req.solicitado_por}</span>}
+                {req?.area && <><span>·</span><span>{req.area}</span></>}
+                {l.fecha_entrega_prom && <><span>·</span><span style={{ color: "var(--warn)" }}>Est: {fmtDate(l.fecha_entrega_prom)}</span></>}
+                {entregado && l.fecha_entrega_real && <><span>·</span><span style={{ color: "var(--accent2)" }}>Entregado: {fmtDate(l.fecha_entrega_real)}</span></>}
+                {l.nro_remito && <><span>·</span><span className="text-mono" style={{ color: "var(--accent2)" }}>Remito: {l.nro_remito}</span></>}
+              </div>
+            </div>
+          );
+        })
+      }
+    </div>
+  );
+}
+
+// ─── PAGE: ARCHIVO ────────────────────────────────────────────────────────────
+function PageArchivo({ tipo, usuarioEmail }) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [proveedores, setProveedores] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (tipo === "entregados") {
+        const [lineas, provs] = await Promise.all([api.getTrackerLineas({ status: "entregado" }), api.getProveedores()]);
+        setData(lineas); setProveedores(provs);
+      } else {
+        setData(await api.getRequisiciones({ status: "rechazado" }));
+      }
+    } finally { setLoading(false); }
+  }, [tipo]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (tipo === "rechazados") return (
+    <div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        data.length === 0 ? <div className="empty-state">Sin rechazadas</div> :
+        data.map(r => <div key={r.id} className="req-row">
+          <div className="flex-between mb8"><span className="text-mono" style={{ fontSize: 11, color: "var(--accent)" }}>REQ-{String(r.nro_solicitud).padStart(4, "0")}</span><span style={{ fontSize: 10, color: "var(--muted)" }}>{fmtDate(r.updated_at)}</span></div>
+          <div className="req-title">{r.titulo}</div>
+          <div className="req-meta"><span>{r.base_buque}</span>{r.motivo_rechazo_categoria && <><span>·</span><span style={{ color: "var(--danger)" }}>{r.motivo_rechazo_categoria}</span></>}</div>
+        </div>)
+      }
+    </div>
+  );
+
+  return (
+    <div>
+      {loading ? <div className="loading"><span className="spin">◌</span></div> :
+        data.length === 0 ? <div className="empty-state">Sin entregas</div> :
+        data.map(l => {
+          const req = l.requisiciones;
+          return <div key={l.id} className="req-row" onClick={() => setSelected(l)}>
+            <div className="flex-gap mb8"><div className="grupo-chip">{l.grupo}</div><span style={{ fontWeight: 600, fontSize: 14 }}>{l.descripcion}</span><TrackerBadge status="entregado" /></div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              {req && <span>{req.base_buque}</span>}
+              {l.proveedor_elegido && <span> · {l.proveedor_elegido}</span>}
+              {l.nro_oc && <span className="text-mono" style={{ color: "var(--accent2)" }}> · {l.nro_oc}</span>}
+              {l.nro_remito && <span> · Remito: {l.nro_remito}</span>}
+              {l.fecha_entrega_real && <span> · {fmtDate(l.fecha_entrega_real)}</span>}
+            </div>
+          </div>;
+        })
+      }
+      {selected && <CotizarModal linea={selected} proveedores={proveedores} onClose={() => setSelected(null)} onSave={(updated) => { setSelected(null); if (updated?._deleted) setData(prev => prev.filter(l => l.id !== updated.id)); else load(); }} onSolicitarConfirmacion={() => {}} usuarioEmail={usuarioEmail} />}
+    </div>
+  );
+}
+
+// ─── FORM: NUEVA REQUISICIÓN ──────────────────────────────────────────────────
+function ReqForm({ proveedores = [], onSave, onCancel }) {
+  const blank = () => ({ id: `tmp${Date.now()}${Math.random()}`, descripcion: "", cantidad: 1, unidad: "Uni", stock_disponible: 0, proveedor_sugerido: "" });
+  const [form, setForm] = useState({
+    titulo: "", empresa: "Parana Logistica", base_buque: "", area: "Tecnica",
+    subarea: "", detalle_tecnico: "", tipo_requisicion: "", urgencia: "Normal",
+    solicitado_por: "", fecha_necesaria: "", observaciones: "",
+  });
+  const [items, setItems] = useState([blank()]);
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setItem = (i, k, v) => { const its = [...items]; its[i] = { ...its[i], [k]: v }; setItems(its); };
+  const bases = BASES_POR_EMPRESA["Parana Logistica"] || [];
+  const subareas = SUBAREA_TECNICA["Parana Logistica"] || [];
+  const detalles = DETALLE_TECNICO[form.subarea] || [];
+
+  const handleSubmit = async () => {
+    if (!form.titulo || !form.base_buque || !form.subarea || !form.solicitado_por) return alert("Completá: Título, Base/Buque, Sub-área, Solicitado por");
+    if (!items.some(i => i.descripcion.trim())) return alert("Agregá al menos un ítem");
+    setSaving(true);
+    try {
+      const cleanItems = items.filter(i => i.descripcion.trim()).map(({ id: _id, ...rest }) => rest);
+      await onSave({ ...form }, cleanItems);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      <div className="form-section">Datos</div>
+      <div className="form-grid">
+        <FG label="Título *"><input value={form.titulo} onChange={e => set("titulo", e.target.value)} placeholder="Ej: Cambio filtros motor principal" /></FG>
+        <FG label="Tipo"><select value={form.tipo_requisicion} onChange={e => set("tipo_requisicion", e.target.value)}><option value="">Seleccionar...</option>{TIPOS_REQUISICION.map(t => <option key={t}>{t}</option>)}</select></FG>
+      </div>
+      <div className="form-grid">
+        <FG label="Base / Buque *"><select value={form.base_buque} onChange={e => set("base_buque", e.target.value)}><option value="">Seleccionar...</option>{bases.map(b => <option key={b}>{b}</option>)}</select></FG>
+        <FG label="Sub-área *">
+          <select value={form.subarea} onChange={e => { set("subarea", e.target.value); set("detalle_tecnico", ""); }}>
+            <option value="">Seleccionar...</option>
+            {subareas.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </FG>
+        {detalles.length > 0 && <FG label="Detalle técnico"><select value={form.detalle_tecnico} onChange={e => set("detalle_tecnico", e.target.value)}><option value="">Seleccionar...</option>{detalles.map(d => <option key={d}>{d}</option>)}</select></FG>}
+      </div>
+      <div className="form-grid">
+        <FG label="Solicitado por *"><input value={form.solicitado_por} onChange={e => set("solicitado_por", e.target.value)} /></FG>
+        <FG label="Urgencia *"><select value={form.urgencia} onChange={e => set("urgencia", e.target.value)}>{URGENCIA_OPTIONS.map(u => <option key={u}>{u}</option>)}</select></FG>
+        <FG label="Fecha necesaria"><input type="date" value={form.fecha_necesaria} onChange={e => set("fecha_necesaria", e.target.value)} /></FG>
+      </div>
+      <FG label="Observaciones"><textarea value={form.observaciones} onChange={e => set("observaciones", e.target.value)} /></FG>
+
+      <div className="form-section mt16">Ítems</div>
+      <div className="table-wrap">
+        <table className="items-edit">
+          <thead><tr><th style={{ width: "40%" }}>Descripción *</th><th>Cant.</th><th>Unid.</th><th>Proveedor sugerido</th><th></th></tr></thead>
+          <tbody>
+            {items.map((it, i) => <tr key={it.id || i}>
+              <td><input value={it.descripcion} onChange={e => setItem(i, "descripcion", e.target.value)} /></td>
+              <td><input type="number" value={it.cantidad} onChange={e => setItem(i, "cantidad", e.target.value)} style={{ width: 55 }} /></td>
+              <td><input value={it.unidad} onChange={e => setItem(i, "unidad", e.target.value)} style={{ width: 50 }} /></td>
+              <td><select value={it.proveedor_sugerido || ""} onChange={e => setItem(i, "proveedor_sugerido", e.target.value)}><option value="">Sin sugerencia</option>{proveedores.map(p => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}</select></td>
+              <td><button className="btn btn-ghost btn-sm" onClick={() => setItems(items.filter((_, j) => j !== i))}>✕</button></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <button className="btn btn-ghost btn-sm mt8" onClick={() => setItems([...items, blank()])}>Agregar ítem</button>
+      <div className="flex-gap form-footer-actions mt16" style={{ justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+        <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
+        <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Crear Requisición"}</button>
+      </div>
+    </div>
+  );
+}
+
+function PageNueva({ onSaved, onCancel, notify }) {
+  const [proveedores, setProveedores] = useState([]);
+  useEffect(() => { api.getProveedores().then(setProveedores); }, []);
+  const handleSave = async (form, items) => {
+    await api.crearRequisicion(form, items);
+    notify("Requisición creada — pendiente de aprobación", "success");
+    onSaved();
+  };
+  return <div className="card"><div className="card-title">Nueva Requisición</div><ReqForm proveedores={proveedores} onSave={handleSave} onCancel={onCancel} /></div>;
+}
+
+// ─── PAGE: KPIs ──────────────────────────────────────────────────────────────
+function PageCatalogo({ notify }) {
+  const emptyForm = { nombre: "", descripcion: "", unidad: "", rubro: "", categoria_xubio_id: "" };
+  const [items, setItems]         = useState([]);
+  const [xubioProds, setXubioProds] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [saving, setSaving]       = useState(false);
+  const [modal, setModal]         = useState(false);
+  const [modalEditar, setModalEditar] = useState(null);
+  const [form, setForm]           = useState(emptyForm);
+  const [busca, setBusca]         = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [cat, xub] = await Promise.all([
+        api.getCatalogoCompras("pl_offshore"),
+        api.getXubioProductos("pl_offshore"),
+      ]);
+      setItems(cat);
+      setXubioProds(xub);
+    } catch (e) {
+      notify("Error al cargar: " + e.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const nombreCategoria = (xubioId) => {
+    const p = xubioProds.find(x => String(x.xubio_id) === String(xubioId));
+    return p ? p.nombre : "—";
+  };
+
+  const handleSave = async () => {
+    if (!form.nombre.trim()) { notify("El nombre es obligatorio", "error"); return; }
+    if (!form.categoria_xubio_id) { notify("Elegí una categoría de Xubio", "error"); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        empresa: "pl_offshore",
+        nombre: form.nombre.trim(),
+        descripcion: form.descripcion || null,
+        unidad: form.unidad || null,
+        rubro: form.rubro || null,
+        categoria_xubio_id: Number(form.categoria_xubio_id),
+        activo: true,
+      };
+      const nuevo = await api.crearProductoCatalogo(payload);
+      setItems(prev => [...prev, nuevo]);
+      setModal(false);
+      setForm(emptyForm);
+      notify("Producto agregado al catálogo", "success");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const abrirEditar = (prod) => {
+    setForm({
+      nombre: prod.nombre || "",
+      descripcion: prod.descripcion || "",
+      unidad: prod.unidad || "",
+      rubro: prod.rubro || "",
+      categoria_xubio_id: prod.categoria_xubio_id != null ? String(prod.categoria_xubio_id) : "",
+    });
+    setModalEditar(prod);
+  };
+
+  const handleUpdate = async () => {
+    if (!form.nombre.trim()) { notify("El nombre es obligatorio", "error"); return; }
+    if (!form.categoria_xubio_id) { notify("Elegí una categoría de Xubio", "error"); return; }
+    setSaving(true);
+    try {
+      const cambios = {
+        nombre: form.nombre.trim(),
+        descripcion: form.descripcion || null,
+        unidad: form.unidad || null,
+        rubro: form.rubro || null,
+        categoria_xubio_id: Number(form.categoria_xubio_id),
+      };
+      const upd = await api.actualizarProductoCatalogo(modalEditar.id, cambios);
+      setItems(prev => prev.map(x => x.id === upd.id ? upd : x));
+      setModalEditar(null);
+      setForm(emptyForm);
+      notify("Producto actualizado", "success");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDesactivar = async (prod) => {
+    if (!confirm(`¿Desactivar "${prod.nombre}"? No aparecerá en el catálogo.`)) return;
+    try {
+      await api.eliminarProductoCatalogo(prod.id);
+      setItems(prev => prev.filter(x => x.id !== prod.id));
+      if (modalEditar?.id === prod.id) { setModalEditar(null); setForm(emptyForm); }
+      notify("Producto desactivado", "warn");
+    } catch (e) {
+      notify("Error: " + e.message, "error");
+    }
+  };
+
+  const filtrados = items.filter(p => {
+    if (!busca.trim()) return true;
+    const t = busca.toLowerCase();
+    return (p.nombre || "").toLowerCase().includes(t) ||
+           (p.rubro || "").toLowerCase().includes(t);
+  });
+
+  const ModalProducto = ({ titulo, onGuardar, onCerrar, extraFooter }) => (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onCerrar()}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="mhdr"><div className="mtitle">{titulo}</div><button className="mclose" onClick={onCerrar}>✕</button></div>
+        <div className="mbody">
+          <div className="form-grid">
+            <FG label="Nombre *"><input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} autoFocus /></FG>
+            <FG label="Rubro"><input value={form.rubro} onChange={e => setForm(f => ({ ...f, rubro: e.target.value }))} placeholder="Proteínas, Repuestos…" /></FG>
+            <FG label="Unidad"><input value={form.unidad} onChange={e => setForm(f => ({ ...f, unidad: e.target.value }))} placeholder="kg, unidad, litro…" /></FG>
+          </div>
+          <FG label="Descripción"><textarea value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} /></FG>
+          <FG label="Categoría Xubio *" hint="A qué producto contable de Xubio se imputa">
+            <select value={form.categoria_xubio_id} onChange={e => setForm(f => ({ ...f, categoria_xubio_id: e.target.value }))}>
+              <option value="">— Elegir categoría —</option>
+              {xubioProds.map(x => (
+                <option key={x.xubio_id} value={x.xubio_id}>
+                  {x.nombre}{x.codigo ? ` (${x.codigo})` : ""}
+                </option>
+              ))}
+            </select>
+          </FG>
+          {xubioProds.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>
+              No hay categorías de Xubio sincronizadas. Andá a "Catálogo Xubio" y sincronizá primero.
+            </div>
+          )}
+        </div>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          {extraFooter || <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onCerrar}>Cancelar</button>
+            <button className="btn btn-primary" onClick={onGuardar} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">
+          Catálogo de productos (PL Offshore)
+          <button className="btn btn-primary btn-sm" onClick={() => { setForm(emptyForm); setModal(true); }}>+ Agregar</button>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <input
+            type="search"
+            placeholder="Buscar por nombre o rubro…"
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            style={{
+              maxWidth: 320, width: "100%", height: 38, padding: "0 12px",
+              border: "1px solid var(--border, #C9D0D6)", borderRadius: 4,
+              font: "400 13px/1.2 'IBM Plex Sans', sans-serif", outline: "none",
+            }}
+          />
+          <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted)" }}>
+            {filtrados.length} de {items.length} productos
+          </span>
+        </div>
+
+        {loading ? <div className="loading"><span className="spin">◌</span></div> :
+          <table>
+            <thead><tr><th>Producto</th><th>Rubro</th><th>Unidad</th><th>Categoría Xubio</th><th></th></tr></thead>
+            <tbody>
+              {filtrados.map(p => (
+                <tr key={p.id}>
+                  <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.rubro || "—"}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.unidad || "—"}</td>
+                  <td style={{ fontSize: 12 }}>{nombreCategoria(p.categoria_xubio_id)}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}>Editar</button>
+                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(p)}>✕</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!filtrados.length && (
+                <tr><td colSpan={5}><div className="empty-state">
+                  {items.length === 0
+                    ? "Todavía no hay productos. Tocá \"+ Agregar\" para crear el primero."
+                    : "Ningún producto coincide con la búsqueda."}
+                </div></td></tr>
+              )}
+            </tbody>
+          </table>
+        }
+      </div>
+
+      {modal && <ModalProducto
+        titulo="Nuevo producto"
+        onGuardar={handleSave}
+        onCerrar={() => { setModal(false); setForm(emptyForm); }}
+      />}
+
+      {modalEditar && <ModalProducto
+        titulo={`Editar — ${modalEditar.nombre}`}
+        onGuardar={handleUpdate}
+        onCerrar={() => { setModalEditar(null); setForm(emptyForm); }}
+        extraFooter={
+          <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(modalEditar)}>
+            Desactivar
+          </button>
+        }
+      />}
+    </div>
+  );
+}
+
+function PageCatalogoXubio({ notify }) {
+  const [productos, setProductos] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [syncing, setSyncing]     = useState(false);
+  const [busca, setBusca]         = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProductos(await api.getXubioProductos("pl_offshore")); }
+    catch (e) { notify("Error al cargar: " + e.message, "error"); }
+    finally { setLoading(false); }
+  }, [notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await api.syncXubioProductos("pl_offshore");
+      if (res?.error) throw new Error(res.error);
+      notify(`Sincronizados ${res?.sincronizados ?? 0} productos desde Xubio`, "success");
+      await load();
+    } catch (e) {
+      notify("Error al sincronizar: " + e.message, "error");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const filtrados = productos.filter(p => {
+    if (!busca.trim()) return true;
+    const t = busca.toLowerCase();
+    return (p.nombre || "").toLowerCase().includes(t) ||
+           (p.codigo || "").toLowerCase().includes(t);
+  });
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">
+          Productos de compra en Xubio (PL Offshore)
+          <button className="btn btn-primary btn-sm" onClick={handleSync} disabled={syncing}>
+            {syncing ? "Sincronizando…" : "Sincronizar desde Xubio"}
+          </button>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <input
+            type="search"
+            placeholder="Buscar por nombre o código…"
+            value={busca}
+            onChange={e => setBusca(e.target.value)}
+            style={{
+              maxWidth: 320, width: "100%", height: 38, padding: "0 12px",
+              border: "1px solid var(--border, #C9D0D6)", borderRadius: 4,
+              font: "400 13px/1.2 'IBM Plex Sans', sans-serif", outline: "none",
+            }}
+          />
+          <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted)" }}>
+            {filtrados.length} de {productos.length} productos
+          </span>
+        </div>
+
+        {loading ? <div className="loading"><span className="spin">◌</span></div> :
+          <table>
+            <thead><tr><th>Nombre</th><th>Código</th><th>ID Xubio</th></tr></thead>
+            <tbody>
+              {filtrados.map(p => (
+                <tr key={p.xubio_id}>
+                  <td style={{ fontWeight: 600 }}>{p.nombre || "—"}</td>
+                  <td className="text-muted" style={{ fontSize: 12 }}>{p.codigo || "—"}</td>
+                  <td className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{p.xubio_id}</td>
+                </tr>
+              ))}
+              {!filtrados.length && (
+                <tr><td colSpan={3}><div className="empty-state">
+                  {productos.length === 0
+                    ? "Todavía no hay productos. Tocá \"Sincronizar desde Xubio\" para traerlos."
+                    : "Ningún producto coincide con la búsqueda."}
+                </div></td></tr>
+              )}
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+  );
+}
+
+function PageKPIs() {
+  const [reqs, setReqs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { api.getRequisiciones({ empresa: "Parana Logistica" }).then(d => { setReqs(d); setLoading(false); }); }, []);
+  if (loading) return <div className="loading"><span className="spin">◌</span></div>;
+  const total = reqs.length;
+  const urgentes = reqs.filter(r => r.urgencia === "Critica").length;
+  const rechazadas = reqs.filter(r => r.status === "rechazado").length;
+  const conIV = reqs.filter(r => r.veces_devuelto > 0).length;
+  const bySol = {};
+  reqs.forEach(r => { if (!bySol[r.solicitado_por]) bySol[r.solicitado_por] = { total: 0, criticas: 0, devueltas: 0 }; bySol[r.solicitado_por].total++; if (r.urgencia === "Critica") bySol[r.solicitado_por].criticas++; if (r.veces_devuelto > 0) bySol[r.solicitado_por].devueltas++; });
+  const byRechazo = {};
+  reqs.filter(r => r.motivo_rechazo_categoria).forEach(r => { byRechazo[r.motivo_rechazo_categoria] = (byRechazo[r.motivo_rechazo_categoria] || 0) + 1; });
+  return (
+    <div>
+      <div className="stats">
+        <div className="stat"><div className="stat-label">Total</div><div className="stat-value va">{total}</div></div>
+        <div className="stat"><div className="stat-label">% Críticas</div><div className="stat-value vr">{total ? Math.round(urgentes / total * 100) : 0}%</div></div>
+        <div className="stat"><div className="stat-label">Devueltas</div><div className="stat-value vm">{conIV}</div></div>
+        <div className="stat"><div className="stat-label">Rechazadas</div><div className="stat-value vgr">{rechazadas}</div></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div className="card">
+          <div className="card-title">Por solicitante</div>
+          <table><thead><tr><th>Solicitante</th><th>Total</th><th>Críticas</th><th>Devueltas</th></tr></thead>
+            <tbody>{Object.entries(bySol).sort((a, b) => b[1].total - a[1].total).map(([s, d]) => <tr key={s}><td>{s}</td><td className="text-mono">{d.total}</td><td style={{ color: d.criticas > 0 ? "var(--danger)" : "inherit", fontFamily: "var(--mono)" }}>{d.criticas}</td><td style={{ color: d.devueltas > 0 ? "var(--warn)" : "inherit", fontFamily: "var(--mono)" }}>{d.devueltas}</td></tr>)}</tbody>
+          </table>
+        </div>
+        <div className="card">
+          <div className="card-title">Motivos de rechazo</div>
+          {Object.keys(byRechazo).length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin rechazos</div> :
+            Object.entries(byRechazo).sort((a, b) => b[1] - a[1]).map(([cat, n]) => <div key={cat} className="kbar">
+              <div className="kbar-lbl"><span style={{ color: "var(--muted)" }}>{cat}</span><span className="text-mono">{n}</span></div>
+              <div className="kbar-track"><div className="kbar-fill" style={{ width: `${n / Math.max(...Object.values(byRechazo)) * 100}%`, background: "var(--danger)" }} /></div>
+            </div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PAGE: PROVEEDORES ────────────────────────────────────────────────────────
+function PageProveedores({ notify }) {
+  const emptyForm = { nombre: "", cuit: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" };
+  const [provs, setProvs]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [modal, setModal]       = useState(false);       // nuevo
+  const [modalEditar, setModalEditar] = useState(null);  // editar
+  const [selected, setSelected] = useState(null);        // historial
+  const [historial, setHistorial] = useState([]);
+  const [form, setForm]         = useState(emptyForm);
+  const [formEdit, setFormEdit] = useState(emptyForm);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProvs(await api.getProveedores()); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Crear ──
+  const handleSave = async () => {
+    if (!form.nombre.trim()) return;
+    setSaving(true);
+    try {
+      const nuevo = await api.crearProveedor({ ...form, activo: true });
+      setProvs(p => [...p, nuevo]);
+      setModal(false);
+      setForm(emptyForm);
+      notify("Proveedor agregado", "success");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+
+  // ── Editar ──
+  const abrirEditar = (prov) => {
+    setFormEdit({
+      nombre:        prov.nombre || "",
+      cuit:          prov.cuit || "",
+      rubro:         prov.rubro || "",
+      contacto:      prov.contacto || "",
+      email:         prov.email || "",
+      telefono:      prov.telefono || "",
+      notas:         prov.notas || "",
+      palabras_clave: prov.palabras_clave || "",
+    });
+    setModalEditar(prov);
+  };
+
+  const handleUpdate = async () => {
+    if (!formEdit.nombre.trim()) return;
+    setSaving(true);
+    try {
+      const updated = await api.actualizarProveedor(modalEditar.id, formEdit);
+      setProvs(p => p.map(x => x.id === updated.id ? updated : x));
+      setModalEditar(null);
+      notify("Proveedor actualizado", "success");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+
+  // ── Desactivar ──
+  const handleDesactivar = async (prov) => {
+    if (!confirm(`¿Desactivar "${prov.nombre}"? No aparecerá en los listados.`)) return;
+    try {
+      await api.eliminarProveedor(prov.id);
+      setProvs(p => p.filter(x => x.id !== prov.id));
+      if (modalEditar?.id === prov.id) setModalEditar(null);
+      notify("Proveedor desactivado", "warn");
+    } catch(e) { notify("Error: " + e.message, "error"); }
+  };
+
+  // ── Historial ──
+  const handleSelect = async (prov) => {
+    setSelected(prov);
+    const lineas = await api.getTrackerLineas({ proveedor: prov.nombre });
+    setHistorial(lineas.filter(l => l.costo_real || l.nro_oc));
+  };
+
+  const ModalForm = ({ titulo, formData, setFormData, onGuardar, onCerrar, extraFooter }) => (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onCerrar()}>
+      <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="mhdr"><div className="mtitle">{titulo}</div><button className="mclose" onClick={onCerrar}>✕</button></div>
+        <div className="mbody">
+          <div className="form-grid">
+            <FG label="Nombre *"><input value={formData.nombre} onChange={e => setFormData(f => ({ ...f, nombre: e.target.value }))} autoFocus /></FG>
+            <FG label="CUIT"><input value={formData.cuit} onChange={e => setFormData(f => ({ ...f, cuit: e.target.value }))} /></FG>
+            <FG label="Rubro"><input value={formData.rubro} onChange={e => setFormData(f => ({ ...f, rubro: e.target.value }))} /></FG>
+            <FG label="Contacto"><input value={formData.contacto} onChange={e => setFormData(f => ({ ...f, contacto: e.target.value }))} /></FG>
+            <FG label="Email"><input type="email" value={formData.email} onChange={e => setFormData(f => ({ ...f, email: e.target.value }))} /></FG>
+            <FG label="Teléfono"><input value={formData.telefono} onChange={e => setFormData(f => ({ ...f, telefono: e.target.value }))} /></FG>
+          </div>
+          <FG label="Palabras clave" hint="Separadas por coma"><input value={formData.palabras_clave} onChange={e => setFormData(f => ({ ...f, palabras_clave: e.target.value }))} /></FG>
+          <FG label="Notas"><textarea value={formData.notas} onChange={e => setFormData(f => ({ ...f, notas: e.target.value }))} /></FG>
+        </div>
+        <div className="mftr" style={{ justifyContent: "space-between" }}>
+          {extraFooter || <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onCerrar}>Cancelar</button>
+            <button className="btn btn-primary" onClick={onGuardar} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      {selected ? (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>← Volver</button>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{selected.nombre}</div>
+            {selected.rubro && <span className="tag">{selected.rubro}</span>}
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={() => abrirEditar(selected)}> Editar proveedor</button>
+          </div>
+          {/* Datos del proveedor */}
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="card-title">Datos de contacto</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px", fontSize: 12 }}>
+              {selected.cuit && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>CUIT</span><div className="text-mono" style={{ fontWeight: 600 }}>{selected.cuit}</div></div>}
+              {selected.contacto && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Contacto</span><div style={{ fontWeight: 600 }}>{selected.contacto}</div></div>}
+              {selected.email && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Email</span><div className="text-mono" style={{ fontSize: 11 }}>{selected.email}</div></div>}
+              {selected.telefono && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Teléfono</span><div>{selected.telefono}</div></div>}
+              {selected.palabras_clave && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Palabras clave</span><div>{selected.palabras_clave}</div></div>}
+              {selected.notas && <div style={{ gridColumn: "1/-1" }}><span style={{ color: "var(--muted)", fontSize: 11 }}>Notas</span><div>{selected.notas}</div></div>}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-title">Historial de compras</div>
+            {historial.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>Sin compras registradas</div> :
+              <table>
+                <thead><tr><th>REQ</th><th>Descripción</th><th>OC</th><th>Precio</th><th>Entrega</th></tr></thead>
+                <tbody>
+                  {historial.map(l => <tr key={l.id}>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{l.requisiciones ? `REQ-${String(l.requisiciones.nro_solicitud).padStart(4, "0")}` : "—"}</td>
+                    <td style={{ fontWeight: 500, fontSize: 12 }}>{l.descripcion}</td>
+                    <td className="text-mono" style={{ fontSize: 11, color: "var(--accent2)" }}>{l.nro_oc || "—"}</td>
+                    <td className="text-mono" style={{ fontSize: 12 }}>{l.costo_real ? fmt(l.costo_real, l.moneda_real) : "—"}</td>
+                    <td style={{ fontSize: 11, color: "var(--muted)" }}>{fmtDate(l.fecha_entrega_real)}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            }
+          </div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="card-title">
+            Maestro de proveedores
+            <button className="btn btn-primary btn-sm" onClick={() => setModal(true)}>+ Agregar</button>
+          </div>
+          {loading ? <div className="loading"><span className="spin">◌</span></div> :
+            <table>
+              <thead><tr><th>Nombre</th><th>CUIT</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th></th></tr></thead>
+              <tbody>
+                {provs.map(p => (
+                  <tr key={p.id}>
+                    <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.cuit || "—"}</td>
+                    <td className="text-muted">{p.rubro || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{p.contacto || "—"}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{p.telefono || "—"}</td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleSelect(p)}>Ver historial</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditar(p)}> Editar</button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--danger)" }} onClick={() => handleDesactivar(p)}>✕</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!provs.length && <tr><td colSpan={7}><div className="empty-state">Sin proveedores</div></td></tr>}
+              </tbody>
+            </table>
+          }
+        </div>
+      )}
+
+      {/* Modal nuevo */}
+      {modal && <ModalForm
+        titulo="Nuevo Proveedor"
+        formData={form}
+        setFormData={setForm}
+        onGuardar={handleSave}
+        onCerrar={() => { setModal(false); setForm(emptyForm); }}
+      />}
+
+      {/* Modal editar */}
+      {modalEditar && <ModalForm
+        titulo={`Editar — ${modalEditar.nombre}`}
+        formData={formEdit}
+        setFormData={setFormEdit}
+        onGuardar={handleUpdate}
+        onCerrar={() => setModalEditar(null)}
+        extraFooter={
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: "var(--danger)" }}
+            onClick={() => handleDesactivar(modalEditar)}
+          >
+             Desactivar
+          </button>
+        }
+      />}
+    </div>
+  );
+}
+
+// ─── LOGIN PAGE ───────────────────────────────────────────────────────────────
+function LoginPage() {
+  const [email, setEmail]     = useState("");
+  const [pass, setPass]       = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+
+  const handleLogin = async () => {
+    setLoading(true); setError("");
+    try {
+      const { error: e } = await supabase.auth.signInWithPassword({ email, password: pass });
+      if (e) setError("Credenciales incorrectas. Verificá tu email y contraseña.");
+    } catch {
+      setError("Error de conexión. Verificá tu red e intentá nuevamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKey = (e) => { if (e.key === "Enter") handleLogin(); };
+
+  const loginCSS = `
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+    .login-page{min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) 560px;background:#FFFFFF;font-family:'IBM Plex Sans',sans-serif;color:#0F1419;text-align:left}
+    .login-bg-overlay,.login-bg-lines{display:none}
+    .login-split{display:contents}
+    .login-left{display:flex;flex-direction:column;justify-content:space-between;gap:48px;padding:56px 64px;background:#002247;border:0;text-align:left}
+    .login-left-integra-wrap{margin:0}
+    .login-left-integra-img{height:52px;width:auto;object-fit:contain;opacity:1;display:block}
+    .login-left-divider{width:100%;height:1px;background:rgba(255,255,255,.14);margin:24px 0}
+    .login-left-company{display:flex;align-items:center;gap:14px;margin:0}
+    .login-left-company-logo{width:40px;height:40px;border-radius:4px;object-fit:contain;border:0;background:rgba(255,255,255,.14);padding:4px}
+    .login-left-company-name{font:600 24px/1.25 'IBM Plex Sans',sans-serif;color:#fff;letter-spacing:0}
+    .login-left-line{width:56px;height:3px;background:#F8BC05;margin:24px 0}
+    .login-left-sub{font:400 15px/1.55 'IBM Plex Sans',sans-serif;color:rgba(255,255,255,.82);max-width:420px;font-style:normal}
+    .login-right{width:auto;display:flex;align-items:center;justify-content:center;padding:56px 64px;background:#FFFFFF}
+    .login-card{width:100%;max-width:420px;background:transparent;border:0;border-radius:0;padding:0;backdrop-filter:none;text-align:left}
+    .login-card-eyebrow{font:500 11px/1.2 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#4A5560;text-transform:uppercase;margin-bottom:12px}
+    .login-card-title{font:600 24px/1.25 'IBM Plex Sans',sans-serif;color:#082F4E;margin-bottom:8px}
+    .login-card-sub{font:400 15px/1.55 'IBM Plex Sans',sans-serif;color:#4A5560;letter-spacing:0;margin-bottom:28px;text-transform:none}
+    .login-fg{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+    .login-fg label{font:500 11px/1.2 'IBM Plex Mono',monospace;color:#4A5560;letter-spacing:.08em;text-transform:uppercase}
+    .login-fg input{border:1px solid #C9D0D6;border-radius:4px;height:40px;padding:0 12px;font:400 14px/1.2 'IBM Plex Sans',sans-serif;color:#0F1419;background:#FFFFFF;outline:none;transition:border-color 120ms cubic-bezier(.2,0,.38,.9)}
+    .login-fg input::placeholder{color:#7A8792}
+    .login-fg input:focus{border-width:2px;border-color:#002247;padding:0 11px}
+    .login-btn{width:100%;height:44px;padding:0 16px;margin-top:24px;background:#F8BC05;color:#002247;border:none;border-radius:4px;font:600 15px/1.2 'IBM Plex Sans',sans-serif;cursor:pointer;transition:background-color 120ms cubic-bezier(.2,0,.38,.9);letter-spacing:0}
+    .login-btn:hover{background:#DCA704}
+    .login-btn:disabled{background:#E4E8EC;color:#7A8792;cursor:not-allowed}
+    .login-error{background:#FFFFFF;color:#0F1419;border:1px solid #E4E8EC;border-left:3px solid #B3261E;border-radius:4px;padding:12px 16px;font:400 13px/1.45 'IBM Plex Sans',sans-serif;margin-bottom:16px}
+    .login-footer{text-align:left;font:500 11px/1.2 'IBM Plex Mono',monospace;color:#4A5560;margin-top:32px;letter-spacing:.06em}
+    .login-back{text-align:left;margin-top:12px;font:500 14px/1.2 'IBM Plex Sans',sans-serif;color:#002247;cursor:pointer}
+    .login-back:hover{text-decoration:underline}
+    @media(max-width:900px){
+      .login-page{grid-template-columns:1fr}
+      .login-left{padding:40px 24px;gap:32px}
+      .login-left-integra-img{height:40px}
+      .login-left-sub{max-width:100%}
+      .login-right{padding:40px 24px}
+    }
+  
+  `;
+
+  return (
+    <>
+      <style>{loginCSS}</style>
+      <div className="login-page">
+        <div className="login-bg-lines" />
+        <div className="login-bg-overlay" />
+        <div className="login-split">
+
+          {/* LEFT — idéntico al portal */}
+          <div className="login-left">
+            <div className="login-left-integra-wrap">
+              <img src="/integra-logo-white-noclaim.svg" alt="INTEGRA" className="login-left-integra-img" />
+            </div>
+            <div className="login-left-divider" />
+            <div className="login-left-company">
+              <img src="/PL.png" alt="PL Offshore" className="login-left-company-logo" />
+              <div className="login-left-company-name">PL Offshore | Compras</div>
+            </div>
+            <div className="login-left-line" />
+            <div className="login-left-sub">We Find the Way, or We Make One.</div>
+          </div>
+
+          {/* RIGHT */}
+          <div className="login-right">
+            <div className="login-card">
+              <div className="login-card-eyebrow">PL Offshore | Compras Técnicas</div>
+              <div className="login-card-title">Acceso al portal</div>
+              <div className="login-card-sub">Solo personal autorizado</div>
+              {error && <div className="login-error">{error}</div>}
+              <div className="login-fg">
+                <label>Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={handleKey} placeholder="usuario@paranalogistica.com.ar" autoFocus />
+              </div>
+              <div className="login-fg">
+                <label>Contraseña</label>
+                <input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={handleKey} placeholder="••••••••" />
+              </div>
+              <button className="login-btn" onClick={handleLogin} disabled={loading || !email || !pass}>
+                {loading ? "Ingresando..." : "Ingresar →"}
+              </button>
+              <div className="login-footer">PL Offshore · Acceso restringido</div>
+              <div className="login-back" onClick={() => window.location.href = PORTAL_URL}>← Volver a Grupo PL</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── ROOT APP ─────────────────────────────────────────────────────────────────
+function ComprasApp({ session }) {
+  const usuarioEmail = getUsuario(session);
+  const [page, setPage] = useState("inbox-aprobacion");
+  const [notif, setNotif] = useState(null);
+  const [counts, setCounts] = useState({ aprobacion: 0, cotizar: 0, confirmacion: 0, tracker: 0 });
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const notify = useCallback((text, type = "info") => {
+    setNotif({ text, type }); setTimeout(() => setNotif(null), 4000);
+  }, []);
+
+  const [navOpen, setNavOpen] = useState(true);
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const [reqs, tracker] = await Promise.all([
+        api.getRequisiciones({ empresa: "Parana Logistica", statuses: ["pendiente_aprobacion"] }),
+        api.getTrackerLineas({ statuses: ["en_cotizacion", "pendiente_confirmacion", "oc_emitida", "en_transito"] })
+      ]);
+      setCounts({
+        aprobacion: reqs.length,
+        cotizar: tracker.filter(l => l.status === "en_cotizacion").length,
+        confirmacion: tracker.filter(l => l.status === "pendiente_confirmacion").length,
+        tracker: tracker.length,
+      });
+    } catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => { loadCounts(); }, [loadCounts, refreshKey]);
+
+  /* ── Iconos de línea · trazo 1,6 · sin relleno · toman el color del texto ──
+     El brand book declara el set propio pendiente para la v1.1. Hasta entonces,
+     estas formas mínimas reemplazan a los emoji, que están prohibidos. */
+  const Ico = ({ d, size = 18 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>
+  );
+  const ICONS = {
+    clock:   <><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></>,
+    file:    <><path d="M14 3H7a1.6 1.6 0 0 0-1.6 1.6v14.8A1.6 1.6 0 0 0 7 21h10a1.6 1.6 0 0 0 1.6-1.6V7.6z" /><path d="M14 3v4.6h4.6" /></>,
+    swap:    <><path d="M4 8h13l-3-3" /><path d="M20 16H7l3 3" /></>,
+    list:    <><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" /></>,
+    eye:     <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></>,
+    check:   <path d="M4.5 12.5l5 5 10-11" />,
+    x:       <path d="M6 6l12 12M18 6L6 18" />,
+    plus:    <path d="M12 5v14M5 12h14" />,
+    chart:   <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
+    factory: <><path d="M3 21V10l6 4V10l6 4V6l6 3v12z" /><path d="M3 21h18" /></>,
+    back:    <><path d="M19 12H5" /><path d="M11 6l-6 6 6 6" /></>,
+    panel:   <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9.5 4v16" /></>,
+    search:  <><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></>,
+    bell:    <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
+    help:    <><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.3c-.7.4-1.1 1-1.1 1.7v.3" /><path d="M12 17.5h.01" /></>,
+    box:     <><path d="M3.3 7L12 3l8.7 4v10L12 21 3.3 17z" /><path d="M3.3 7L12 11l8.7-4" /><path d="M12 11v10" /></>,
+  };
+
+  /* Título, bajada y grupo de cada pantalla. Un solo lugar que lo declara. */
+  const SECCIONES = {
+    "inbox-aprobacion":  { grupo: "Bandeja",     titulo: "Pendientes de aprobación", sub: "Requisiciones que esperan tu decisión. La fecha de necesidad ordena la prioridad operativa." },
+    "para-cotizar":      { grupo: "Bandeja",     titulo: "Para cotizar",             sub: "Aprobadas y a la espera de cotizaciones de proveedores habilitados." },
+    "confirmacion":      { grupo: "Bandeja",     titulo: "Confirmación de valor",    sub: "Cotizadas y pendientes de confirmar el valor final antes de emitir la orden." },
+    "tracker":           { grupo: "Seguimiento", titulo: "Compras en curso",         sub: "Órdenes emitidas, con proveedor y fecha de entrega comprometida." },
+    "tracker-simple":    { grupo: "Seguimiento", titulo: "Seguimiento de entregas",  sub: "Avance de cada orden desde la emisión hasta la recepción a bordo." },
+    "archivo-entregados":{ grupo: "Archivo",     titulo: "Entregados",               sub: "Recepción confirmada a bordo o en base, con remito asociado." },
+    "archivo-rechazados":{ grupo: "Archivo",     titulo: "Rechazados",               sub: "Requisiciones rechazadas, con motivo y responsable de la decisión." },
+    "nueva":             { grupo: "Gestión",     titulo: "Nueva requisición",        sub: "Los campos obligatorios definen el circuito de aprobación." },
+    "proveedores":       { grupo: "Gestión",     titulo: "Proveedores",              sub: "Padrón habilitado, con rubro, condición fiscal y datos de contacto." },
+    "catalogo":          { grupo: "Gestión",     titulo: "Catálogo",                 sub: "Productos de compra propios. Cada uno se imputa a una categoría contable de Xubio." },
+    "catalogo-xubio":    { grupo: "Gestión",     titulo: "Catálogo Xubio",           sub: "Productos de compra sincronizados desde Xubio. Xubio es la fuente de verdad; acá se ven en modo lectura." },
+    "kpis":              { grupo: "Gestión",     titulo: "KPIs y reportes",          sub: "Tiempo de ciclo, cumplimiento de entrega y distribución por rubro." },
+  };
+
+  const NAV = [
+    { titulo: "Bandeja", items: [
+      { id: "inbox-aprobacion", icon: "clock", label: "Pendientes de aprobación", count: counts.aprobacion },
+      { id: "para-cotizar",     icon: "file",  label: "Para cotizar",             count: counts.cotizar, tone: "amber" },
+      { id: "confirmacion",     icon: "swap",  label: "Confirmación de valor",    count: counts.confirmacion, tone: "amber" },
+    ]},
+    { titulo: "Seguimiento", items: [
+      { id: "tracker",        icon: "list", label: "Compras en curso",        count: counts.tracker, tone: "gray" },
+      { id: "tracker-simple", icon: "eye",  label: "Seguimiento de entregas", count: 0 },
+    ]},
+    { titulo: "Archivo", items: [
+      { id: "archivo-entregados", icon: "check", label: "Entregados", count: 0 },
+      { id: "archivo-rechazados", icon: "x",     label: "Rechazados", count: 0 },
+    ]},
+    { titulo: "Gestión", items: [
+      { id: "nueva",         icon: "plus",    label: "Nueva requisición", count: 0 },
+      { id: "proveedores",   icon: "factory", label: "Proveedores",       count: 0 },
+      { id: "catalogo",       icon: "list",   label: "Catálogo",          count: 0 },
+      { id: "catalogo-xubio", icon: "box",    label: "Catálogo Xubio",    count: 0 },
+      { id: "kpis",          icon: "chart",   label: "KPIs y reportes",   count: 0 },
+    ]},
+  ];
+
+  const seccion = SECCIONES[page] || { grupo: "Compras", titulo: page, sub: "" };
+  const refresh = () => { setRefreshKey(k => k + 1); loadCounts(); };
+  const inicial = (usuarioEmail || "C").replace(/@.*$/, "").slice(0, 2).toUpperCase();
+
+  return (
+    <>
+      <style>{CSS}</style>
+
+      <header className="appbar">
+        <img src="/integra-isotipo-white.svg" alt="INTEGRA" className="appbar-iso" />
+        <span className="appbar-div" />
+        <span className="appbar-instance">PL Offshore</span>
+        <input className="appbar-search" type="search" disabled placeholder="Buscar en todo INTEGRA" aria-label="Buscar" />
+        <div className="appbar-tools">
+          <span style={{ color: "rgba(255,255,255,.86)", display: "block" }}><Ico d={ICONS.bell} /></span>
+          <span style={{ color: "rgba(255,255,255,.86)", display: "block" }}><Ico d={ICONS.help} /></span>
+          <span className="appbar-div" />
+          <span className="appbar-avatar">{inicial}</span>
+          <span className="appbar-user">{usuarioEmail}</span>
+          <button className="appbar-link" onClick={() => window.location.href = PORTAL_URL}>Volver al portal</button>
+        </div>
+      </header>
+
+      <div className={`shell ${navOpen ? "" : "is-collapsed"}`}>
+        <nav className="sidebar">
+          <div className="sidebar-header">
+            <img src="/PL.png" alt="PL Offshore" className="sidebar-logo-img" />
+            {navOpen && (
+              <div>
+                <div className="sidebar-logo-main">Compras</div>
+                <div className="sidebar-logo-sub">PL Offshore</div>
+              </div>
+            )}
+          </div>
+
+          <div className="sidebar-nav">
+            {NAV.map(grupo => (
+              <div key={grupo.titulo} style={{ marginBottom: 8 }}>
+                {navOpen && <div className="nav-section">{grupo.titulo}</div>}
+                {grupo.items.map(it => (
+                  <button
+                    key={it.id}
+                    className={`ni ${page === it.id ? "active" : ""}`}
+                    onClick={() => setPage(it.id)}
+                    title={it.label}
+                  >
+                    <span className="ni-ico"><Ico d={ICONS[it.icon]} /></span>
+                    {navOpen && <span className="ni-label">{it.label}</span>}
+                    {it.count > 0 && <span className={`ni-badge ${it.tone || ""}`}>{it.count}</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="sidebar-foot">
+            <button className="sidebar-foot-btn" onClick={() => setNavOpen(v => !v)}>
+              <span style={{ display: "block", color: "var(--muted2)" }}><Ico d={ICONS.panel} size={16} /></span>
+              {navOpen && <span style={{ flex: 1, textAlign: "left" }}>Colapsar menú</span>}
+            </button>
+            {navOpen && (
+              <div className="sidebar-foot-meta">
+                <div>COMPRAS v4.0</div>
+                <div>POWERED BY INTEGRA</div>
+              </div>
+            )}
+          </div>
+        </nav>
+
+        <div className="main">
+          <div className="pagehead">
+            <div className="crumb">
+              <button onClick={() => window.location.href = PORTAL_URL}>Portal</button>
+              <span>/</span>
+              <button onClick={() => setPage("inbox-aprobacion")}>Compras</button>
+              <span>/</span>
+              <span className="crumb-current">{seccion.titulo}</span>
+            </div>
+            <div className="pagehead-row">
+              <div>
+                <h1>{seccion.titulo}</h1>
+                {seccion.sub && <p>{seccion.sub}</p>}
+              </div>
+              {page !== "nueva" && (
+                <div className="pagehead-actions">
+                  <button className="btn btn-primary" onClick={() => setPage("nueva")}>Nueva requisición</button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="content">
+            {page === "inbox-aprobacion" && <PageInboxAprobacion notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "para-cotizar" && <PageParaCotizar notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "confirmacion" && <PageConfirmacion notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "tracker" && <PageTrackerGeneral key={`tg-${refreshKey}`} notify={notify} onNeedRefresh={refresh} usuarioEmail={usuarioEmail} />}
+            {page === "tracker-simple" && <PageTrackerSimple />}
+            {page === "archivo-entregados" && <PageArchivo tipo="entregados" usuarioEmail={usuarioEmail} />}
+            {page === "archivo-rechazados" && <PageArchivo tipo="rechazados" />}
+            {page === "nueva" && <PageNueva onSaved={() => { setPage("inbox-aprobacion"); loadCounts(); }} onCancel={() => setPage("inbox-aprobacion")} notify={notify} />}
+            {page === "kpis" && <PageKPIs />}
+            {page === "proveedores" && <PageProveedores notify={notify} />}
+            {page === "catalogo" && <PageCatalogo notify={notify} />}
+            {page === "catalogo-xubio" && <PageCatalogoXubio notify={notify} />}
+          </div>
+        </div>
+      </div>
+
+      <Notif msg={notif} onClose={() => setNotif(null)} />
+
+      {/* Navegación inferior · solo mobile. Etiqueta mono en lugar de icono. */}
+      <nav className="mobile-nav">
+        {[
+          { id: "inbox-aprobacion", label: "Aprobar",  icon: "clock", count: counts.aprobacion },
+          { id: "para-cotizar",     label: "Cotizar",  icon: "file",  count: counts.cotizar },
+          { id: "tracker",          label: "En curso", icon: "list",  count: counts.tracker },
+          { id: "nueva",            label: "Nueva",    icon: "plus",  count: 0 },
+          { id: "proveedores",      label: "Padrón",   icon: "factory", count: 0 },
+        ].map(it => (
+          <div
+            key={it.id}
+            className={`mobile-nav-item ${page === it.id ? "active" : ""}`}
+            onClick={() => setPage(it.id)}
+          >
+            <span className="mobile-nav-icon"><Ico d={ICONS[it.icon]} size={18} /></span>
+            <span className="mobile-nav-label">{it.label}</span>
+            {it.count > 0 && <span className="mobile-nav-badge">{it.count}</span>}
+          </div>
+        ))}
+      </nav>
+    </>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#213363" }}>
+      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"rgba(255,255,255,0.3)", letterSpacing:3, textTransform:"uppercase" }}>Cargando...</div>
+    </div>
+  );
+
+  if (!session) return <LoginPage />;
+
+  return <ComprasApp session={session} />;
+}
