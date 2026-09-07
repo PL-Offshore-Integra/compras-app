@@ -2151,7 +2151,7 @@ function PageKPIs() {
 
 // ─── PAGE: PROVEEDORES ────────────────────────────────────────────────────────
 function PageProveedores({ notify }) {
-  const emptyForm = { nombre: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" };
+  const emptyForm = { nombre: "", cuit: "", rubro: "", contacto: "", email: "", telefono: "", notas: "", palabras_clave: "" };
   const [provs, setProvs]       = useState([]);
   const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
@@ -2188,6 +2188,7 @@ function PageProveedores({ notify }) {
   const abrirEditar = (prov) => {
     setFormEdit({
       nombre:        prov.nombre || "",
+      cuit:          prov.cuit || "",
       rubro:         prov.rubro || "",
       contacto:      prov.contacto || "",
       email:         prov.email || "",
@@ -2235,6 +2236,7 @@ function PageProveedores({ notify }) {
         <div className="mbody">
           <div className="form-grid">
             <FG label="Nombre *"><input value={formData.nombre} onChange={e => setFormData(f => ({ ...f, nombre: e.target.value }))} autoFocus /></FG>
+            <FG label="CUIT"><input value={formData.cuit} onChange={e => setFormData(f => ({ ...f, cuit: e.target.value }))} /></FG>
             <FG label="Rubro"><input value={formData.rubro} onChange={e => setFormData(f => ({ ...f, rubro: e.target.value }))} /></FG>
             <FG label="Contacto"><input value={formData.contacto} onChange={e => setFormData(f => ({ ...f, contacto: e.target.value }))} /></FG>
             <FG label="Email"><input type="email" value={formData.email} onChange={e => setFormData(f => ({ ...f, email: e.target.value }))} /></FG>
@@ -2268,6 +2270,7 @@ function PageProveedores({ notify }) {
           <div className="card" style={{ marginBottom: 12 }}>
             <div className="card-title">Datos de contacto</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px", fontSize: 12 }}>
+              {selected.cuit && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>CUIT</span><div className="text-mono" style={{ fontWeight: 600 }}>{selected.cuit}</div></div>}
               {selected.contacto && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Contacto</span><div style={{ fontWeight: 600 }}>{selected.contacto}</div></div>}
               {selected.email && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Email</span><div className="text-mono" style={{ fontSize: 11 }}>{selected.email}</div></div>}
               {selected.telefono && <div><span style={{ color: "var(--muted)", fontSize: 11 }}>Teléfono</span><div>{selected.telefono}</div></div>}
@@ -2301,11 +2304,12 @@ function PageProveedores({ notify }) {
           </div>
           {loading ? <div className="loading"><span className="spin">◌</span></div> :
             <table>
-              <thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th></th></tr></thead>
+              <thead><tr><th>Nombre</th><th>CUIT</th><th>Rubro</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th></th></tr></thead>
               <tbody>
                 {provs.map(p => (
                   <tr key={p.id}>
                     <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td className="text-mono" style={{ fontSize: 11 }}>{p.cuit || "—"}</td>
                     <td className="text-muted">{p.rubro || "—"}</td>
                     <td style={{ fontSize: 12 }}>{p.contacto || "—"}</td>
                     <td className="text-mono" style={{ fontSize: 11 }}>{p.email || "—"}</td>
@@ -2319,7 +2323,7 @@ function PageProveedores({ notify }) {
                     </td>
                   </tr>
                 ))}
-                {!provs.length && <tr><td colSpan={6}><div className="empty-state">Sin proveedores</div></td></tr>}
+                {!provs.length && <tr><td colSpan={7}><div className="empty-state">Sin proveedores</div></td></tr>}
               </tbody>
             </table>
           }
