@@ -6,6 +6,7 @@ import {
   STATUS_LABELS, CATEGORIAS_RECHAZO
 } from "./lib/catalogos";
 import { supabase } from "./lib/supabase";
+import { ArchivoLink } from "./lib/archivos";
 
 const USUARIO = "Comprador"; // fallback — se sobreescribe con email real del session
 const getUsuario = (session) => session?.user?.email || USUARIO;
@@ -1067,7 +1068,7 @@ function CotizarModal({ linea, proveedores, onClose, onSave, onSolicitarConfirma
             {adjuntos.map((adj, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px" }}>
                 <span></span>
-                <a href={adj.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", flex: 1 }}>{adj.nombre}</a>
+                <ArchivoLink href={adj.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", flex: 1 }}>{adj.nombre}</ArchivoLink>
                 <button onClick={async () => { await supabase.storage.from("cotizaciones").remove([adj.path]); setAdjuntos(prev => prev.filter(a => a.path !== adj.path)); }} style={{ background: "none", border: "none", color: "var(--muted2)", cursor: "pointer" }}>✕</button>
               </div>
             ))}
